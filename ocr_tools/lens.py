@@ -1,6 +1,7 @@
 import os
 import requests
 from serpapi import GoogleSearch
+from utils.bifrost_config import get_config
 
 def upload_to_temp_host(image_bytes: bytes) -> str:
     """Uploads image bytes to tmpfiles.org and returns the raw image URL."""
@@ -21,7 +22,7 @@ def upload_to_temp_host(image_bytes: bytes) -> str:
 
 def get_google_lens_context(image_bytes: bytes) -> tuple[str, list[bytes]]:
     """Uploads image, queries SerpApi Google Lens, and returns (formatted context string, list of thumbnail image bytes)."""
-    api_key = os.getenv("SERPAPI_KEY")
+    api_key = get_config("SERPAPI_KEY")
     if not api_key:
         print("SERPAPI_KEY not found in environment. Please add it to .env!")
         return "", []

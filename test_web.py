@@ -2,9 +2,10 @@ from google.cloud import vision
 import sys
 import os
 from dotenv import load_dotenv
+from utils.bifrost_config import get_config
 
 load_dotenv()
-client = vision.ImageAnnotatorClient(client_options={"api_key": os.getenv("GOOGLE_API_KEY")})
+client = vision.ImageAnnotatorClient(client_options={"api_key": get_config("GOOGLE_API_KEY")})
 with open(sys.argv[1], 'rb') as f:
     image = vision.Image(content=f.read())
 response = client.web_detection(image=image)

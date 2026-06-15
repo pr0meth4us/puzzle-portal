@@ -16,12 +16,13 @@ import time
 import random
 import subprocess
 from datetime import datetime
+from utils.bifrost_config import get_config
 
 # Read configurations from environment variables
-FRIENDS_ENV = os.getenv("TIKTOK_FRIENDS", "")
-MESSAGE_ENV = os.getenv("TIKTOK_MESSAGE", "Streak!")
-RUN_TIME_HOUR = int(os.getenv("SCHEDULE_HOUR", "23"))     # 11 PM — gives ~1 hour buffer before midnight reset
-RUN_TIME_MINUTE = int(os.getenv("SCHEDULE_MINUTE", "0"))   # base minute (jitter added on top)
+FRIENDS_ENV = get_config("TIKTOK_FRIENDS", "")
+MESSAGE_ENV = get_config("TIKTOK_MESSAGE", "Streak!")
+RUN_TIME_HOUR = int(get_config("SCHEDULE_HOUR", "23"))     # 11 PM — gives ~1 hour buffer before midnight reset
+RUN_TIME_MINUTE = int(get_config("SCHEDULE_MINUTE", "0"))   # base minute (jitter added on top)
 
 FRIENDS = [f.strip() for f in FRIENDS_ENV.split(",") if f.strip()] if FRIENDS_ENV else []
 

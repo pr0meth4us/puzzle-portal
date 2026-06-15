@@ -2,6 +2,7 @@ import os
 import json
 import requests
 from dotenv import load_dotenv
+from utils.bifrost_config import get_config
 
 # Load environment variables from a .env file
 load_dotenv()
@@ -62,8 +63,8 @@ def filter_playlist_details(raw_data):
 
 
 def fetch_single_playlist():
-    client_id = os.getenv("SPOTIFY_CLIENT_ID")
-    client_secret = os.getenv("SPOTIFY_CLIENT_SECRET")
+    client_id = get_config("SPOTIFY_CLIENT_ID")
+    client_secret = get_config("SPOTIFY_CLIENT_SECRET")
 
     if not client_id or not client_secret:
         print("Error: Client ID or Secret not found in .env file.")

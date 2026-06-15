@@ -10,6 +10,7 @@ from google import genai
 from google.genai import types
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from google.cloud import vision
+from utils.bifrost_config import get_config
 
 # Stealth plugin
 try:
@@ -28,9 +29,9 @@ load_dotenv(dotenv_path=dotenv_path)
 """
 exec(load_dotenv_script)
 
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '').replace('\ufeff', '').strip()
-MONGODB_URI = os.getenv("MONGODB_URI")
-DB_NAME = os.getenv("DB_NAME", "bifrost")
+GEMINI_API_KEY = get_config('GEMINI_API_KEY', '').replace('\ufeff', '').strip()
+MONGODB_URI = get_config("MONGODB_URI")
+DB_NAME = get_config("DB_NAME", "bifrost")
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SESSION_DIR = SCRIPT_DIR / "fb_session_test_bot"
@@ -47,7 +48,7 @@ genai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # Set up Google Cloud Vision
 os.environ['GRPC_ENABLE_FORK_SUPPORT'] = 'False'
-os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = os.getenv(
+os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = get_config(
     'GOOGLE_APPLICATION_CREDENTIALS',
     str(SCRIPT_DIR.parent / 'credentials.json')
 )

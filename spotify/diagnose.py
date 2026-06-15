@@ -2,6 +2,7 @@ import os
 import json
 import requests
 from dotenv import load_dotenv
+from utils.bifrost_config import get_config
 
 load_dotenv()
 
@@ -14,8 +15,8 @@ def get_access_token(client_id, client_secret):
     )
     return resp.json().get("access_token") if resp.status_code == 200 else None
 
-client_id = os.getenv("SPOTIFY_CLIENT_ID")
-client_secret = os.getenv("SPOTIFY_CLIENT_SECRET")
+client_id = get_config("SPOTIFY_CLIENT_ID")
+client_secret = get_config("SPOTIFY_CLIENT_SECRET")
 token = get_access_token(client_id, client_secret)
 headers = {"Authorization": f"Bearer {token}"}
 

@@ -13,17 +13,18 @@ from dotenv import load_dotenv
 from google.cloud import vision
 from google import genai
 from google.genai import types
+from utils.bifrost_config import get_config
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parent
 
 load_dotenv(dotenv_path=PROJECT_DIR / '.env')
 
-GOOGLE_APPLICATION_CREDENTIALS = os.getenv(
+GOOGLE_APPLICATION_CREDENTIALS = get_config(
     'GOOGLE_APPLICATION_CREDENTIALS',
     str(PROJECT_DIR / 'credentials.json')
 )
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+GEMINI_API_KEY = get_config('GEMINI_API_KEY')
 
 IMAGE_FOLDER = SCRIPT_DIR / 'khmer_test_images'
 OUTPUT_FOLDER = SCRIPT_DIR / 'results'

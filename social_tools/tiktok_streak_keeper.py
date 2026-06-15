@@ -14,6 +14,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from utils.bifrost_config import get_config
 
 try:
     import pytz
@@ -69,8 +70,8 @@ def _human_pause_between_friends():
 
 
 def load_state_from_db() -> str | None:
-    mongo_uri = os.getenv("MONGODB_URI")
-    db_name = os.getenv("DB_NAME", "expTracker")
+    mongo_uri = get_config("MONGODB_URI")
+    db_name = get_config("DB_NAME", "expTracker")
     if not mongo_uri:
         return None
         
@@ -89,8 +90,8 @@ def load_state_from_db() -> str | None:
 
 
 def save_state_to_db(state_json: str) -> None:
-    mongo_uri = os.getenv("MONGODB_URI")
-    db_name = os.getenv("DB_NAME", "expTracker")
+    mongo_uri = get_config("MONGODB_URI")
+    db_name = get_config("DB_NAME", "expTracker")
     if not mongo_uri:
         return
         
@@ -111,8 +112,8 @@ def save_state_to_db(state_json: str) -> None:
 
 def load_dynamic_config() -> tuple[list[str], dict, dict]:
     """Fetches target friends, message components, and Markov models directly from MongoDB."""
-    mongo_uri = os.getenv("MONGODB_URI")
-    db_name = os.getenv("DB_NAME", "expTracker")
+    mongo_uri = get_config("MONGODB_URI")
+    db_name = get_config("DB_NAME", "expTracker")
     friends = []
     components = {}
     markov_models = {}
@@ -158,11 +159,11 @@ def login_mode() -> None:
             "args": ["--disable-blink-features=AutomationControlled"],
         }
 
-        proxy_server = os.getenv("PROXY_SERVER")
+        proxy_server = get_config("PROXY_SERVER")
         if proxy_server:
             launch_kwargs["proxy"] = {"server": proxy_server}
-            proxy_username = os.getenv("PROXY_USERNAME")
-            proxy_password = os.getenv("PROXY_PASSWORD")
+            proxy_username = get_config("PROXY_USERNAME")
+            proxy_password = get_config("PROXY_PASSWORD")
             if proxy_username and proxy_password:
                 launch_kwargs["proxy"]["username"] = proxy_username
                 launch_kwargs["proxy"]["password"] = proxy_password
@@ -189,7 +190,7 @@ def login_mode() -> None:
 
 def generate_streak_message(db_components: dict, markov_models: dict) -> str:
     """Generates a highly creative, vibe-tagged, time-aware message using Markov chains or a robust fallback."""
-    timezone_str = os.getenv("TIMEZONE", "Asia/Phnom_Penh")
+    timezone_str = get_config("TIMEZONE", "Asia/Phnom_Penh")
     if pytz:
         try:
             tz = pytz.timezone(timezone_str)
@@ -328,11 +329,11 @@ def send_streak_messages(cli_friends: list[str] | None, message: str, headed: bo
         # if headed:
         #     launch_kwargs["channel"] = "chrome"
             
-        proxy_server = os.getenv("PROXY_SERVER")
+        proxy_server = get_config("PROXY_SERVER")
         if proxy_server:
             launch_kwargs["proxy"] = {"server": proxy_server}
-            proxy_username = os.getenv("PROXY_USERNAME")
-            proxy_password = os.getenv("PROXY_PASSWORD")
+            proxy_username = get_config("PROXY_USERNAME")
+            proxy_password = get_config("PROXY_PASSWORD")
             if proxy_username and proxy_password:
                 launch_kwargs["proxy"]["username"] = proxy_username
                 launch_kwargs["proxy"]["password"] = proxy_password
@@ -565,8 +566,8 @@ def send_streak_messages(cli_friends: list[str] | None, message: str, headed: bo
                         comments_list.append({"text": text, "href": href})
                         
                 seen_comments_in_db = []
-                mongo_uri = os.getenv("MONGODB_URI")
-                db_name = os.getenv("DB_NAME", "expTracker")
+                mongo_uri = get_config("MONGODB_URI")
+                db_name = get_config("DB_NAME", "expTracker")
                 if mongo_uri:
                     try:
                         from pymongo import MongoClient

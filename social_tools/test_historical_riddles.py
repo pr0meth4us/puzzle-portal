@@ -9,6 +9,7 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 from google import genai
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+from utils.bifrost_config import get_config
 
 # Stealth plugin to patch browser fingerprint leaks
 try:
@@ -28,9 +29,9 @@ load_dotenv(dotenv_path=dotenv_path)
 exec(load_dotenv_script)
 
 HTML_FILE_PATH = "/Users/nicksng/Desktop/facebook-spnn17-06_06_2026-VSBwAAMW/your_facebook_activity/messages/inbox/1276957488995520/message_1.html"
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '').replace('\ufeff', '').strip()
-MONGODB_URI = os.getenv("MONGODB_URI")
-DB_NAME = os.getenv("DB_NAME", "expTracker")
+GEMINI_API_KEY = get_config('GEMINI_API_KEY', '').replace('\ufeff', '').strip()
+MONGODB_URI = get_config("MONGODB_URI")
+DB_NAME = get_config("DB_NAME", "expTracker")
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SESSION_DIR = SCRIPT_DIR / "fb_session"

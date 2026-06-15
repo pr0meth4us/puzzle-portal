@@ -3,6 +3,7 @@ import sys
 from dotenv import load_dotenv
 from ocr_tools.lens import get_google_lens_context, upload_to_temp_host
 from serpapi import GoogleSearch
+from utils.bifrost_config import get_config
 
 load_dotenv()
 
@@ -15,7 +16,7 @@ print("Uploaded to:", image_url)
 params = {
     "engine": "google_lens",
     "url": image_url,
-    "api_key": os.getenv("SERPAPI_KEY")
+    "api_key": get_config("SERPAPI_KEY")
 }
 
 search = GoogleSearch(params)

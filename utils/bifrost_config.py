@@ -1,66 +1,45 @@
 import os
-import time
 import requests
-import logging
-from cachetools import TTLCache
+from dotenv import load_dotenv
 
-logger = logging.getLogger(__name__)
+# Load local .env first to get the BIFROST_ credentials
+load_dotenv()
 
-# Cache for 5 minutes
-_config_cache = TTLCache(maxsize=1, ttl=300)
+# Synchronous Pull on Boot
+bifrost_url = os.getenv("BIFROST_URL")
+client_id = os.getenv("BIFROST_CLIENT_ID")
+webhook_secret = os.getenv("BIFROST_WEBHOOK_SECRET")
 
-def _fetch_remote_config():
-    """Fetches the encrypted config blob from Bifrost via HTTP."""
-    bifrost_url = os.getenv("BIFROST_URL", "http://bifrost:5000").rstrip("/")
-    client_id = os.getenv("BIFROST_CLIENT_ID")
-    webhook_secret = os.getenv("BIFROST_WEBHOOK_SECRET")
-
-    if not client_id or not webhook_secret:
-        logger.warning("BIFROST_CLIENT_ID or BIFROST_WEBHOOK_SECRET is missing. Cannot fetch remote config.")
-        return {}
-
+if bifrost_url and client_id and webhook_secret:
+    endpoint = f"{bifrost_url.rstrip('/')}/api/v1/config"
+    headers = {
+        "X-Client-ID": client_id,
+        "X-Webhook-Secret": webhook_secret
+    }
     try:
-        response = requests.get(
-            f"{bifrost_url}/api/v1/config",
-            headers={
-                "X-Client-ID": client_id,
-                "X-Webhook-Secret": webhook_secret
-            },
-            timeout=5
-        )
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("status") == "success":
-                return data.get("data", {}).get("api_keys", {})
-        else:
-            logger.error(f"Failed to fetch config from Bifrost: {response.status_code} {response.text}")
+        response = requests.get(endpoint, headers=headers, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Dump decrypted keys straight into local memory
+        keys_loaded = 0
+        for key, value in data.get("data", {}).get("api_keys", {}).items():
+            if value:
+                os.environ[key] = str(value)
+                keys_loaded += 1
+                
+        print(f"✅ Bifrost: Synchronous Pull successful. Loaded {keys_loaded} keys into memory.")
     except Exception as e:
-        logger.error(f"Error connecting to Bifrost config API: {e}")
-
-    return {}
+        print(f"❌ Bifrost: Failed to fetch secure config - {e}")
+else:
+    print("⚠️ Warning: Missing Bifrost credentials. Running with standard local env.")
 
 def get_config(key_name: str, default: str = "") -> str:
     """
-    Fetches a config value from Bifrost.
-    Falls back to os.getenv if not found.
+    Fetches a config value from the environment.
+    (Keys were synchronously injected into os.environ at boot via Bifrost)
     """
-    safe_key_name = key_name.strip().upper()
-    
-    # 1. Try cache
-    if "config_blob" not in _config_cache:
-        # Load from Bifrost
-        blob = _fetch_remote_config()
-        _config_cache["config_blob"] = blob
-    else:
-        blob = _config_cache["config_blob"]
-
-    # 2. Check in blob (now returned as plaintext by Bifrost)
-    if safe_key_name in blob:
-        val = blob[safe_key_name]
-        if val:
-            return val
-                
-    # 3. Fallback to local env variables
+    safe_key_name = key_name.strip()
     fallback = os.getenv(safe_key_name)
     if fallback is not None:
         return fallback

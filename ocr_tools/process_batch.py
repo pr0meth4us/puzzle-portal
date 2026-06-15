@@ -26,6 +26,7 @@ import asyncio
 import platform
 from pathlib import Path
 from dotenv import load_dotenv
+from utils.bifrost_config import get_config
 
 os.environ['GRPC_VERBOSITY'] = 'ERROR'
 os.environ['GRPC_TRACE'] = ''
@@ -54,23 +55,23 @@ PROJECT_DIR = SCRIPT_DIR.parent
 
 load_dotenv(dotenv_path=PROJECT_DIR / '.env')
 
-GOOGLE_APPLICATION_CREDENTIALS = os.getenv(
+GOOGLE_APPLICATION_CREDENTIALS = get_config(
     'GOOGLE_APPLICATION_CREDENTIALS',
     str(PROJECT_DIR / 'credentials.json')
 ).replace('\ufeff', '').strip()
 
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '').replace('\ufeff', '').strip()
+GEMINI_API_KEY = get_config('GEMINI_API_KEY', '').replace('\ufeff', '').strip()
 
 IMAGE_FOLDER = Path(
-    os.getenv('IMAGE_FOLDER', str(SCRIPT_DIR / 'folder3'))
+    get_config('IMAGE_FOLDER', str(SCRIPT_DIR / 'folder3'))
 ).resolve()
 
 OUTPUT_JSON = Path(
-    os.getenv('OUTPUT_JSON', str(SCRIPT_DIR / 'results' / 'output.json'))
+    get_config('OUTPUT_JSON', str(SCRIPT_DIR / 'results' / 'output.json'))
 ).resolve()
 
 SUPPORTED_EXTS = {'.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif', '.tiff'}
-MAX_CONCURRENT = int(os.getenv('MAX_CONCURRENT', '5'))
+MAX_CONCURRENT = int(get_config('MAX_CONCURRENT', '5'))
 
 # ── ANSI colours ──────────────────────────────────────────────────────────────
 GREEN  = "\033[92m"

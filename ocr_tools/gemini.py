@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+from utils.bifrost_config import get_config
 
 os.environ['GRPC_VERBOSITY'] = 'ERROR'
 os.environ['GRPC_TRACE'] = ''
@@ -27,8 +28,8 @@ parent_dir = Path(__file__).resolve().parent.parent
 dotenv_path = parent_dir / '.env'
 load_dotenv(dotenv_path=dotenv_path)
 
-GOOGLE_APPLICATION_CREDENTIALS = os.getenv('GOOGLE_APPLICATION_CREDENTIALS', str(parent_dir / 'credentials.json')).replace('\ufeff', '').strip()
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '').replace('\ufeff', '').strip()
+GOOGLE_APPLICATION_CREDENTIALS = get_config('GOOGLE_APPLICATION_CREDENTIALS', str(parent_dir / 'credentials.json')).replace('\ufeff', '').strip()
+GEMINI_API_KEY = get_config('GEMINI_API_KEY', '').replace('\ufeff', '').strip()
 
 IMAGE_FOLDER = Path(__file__).resolve().parent / 'khmer_test_images'
 OUTPUT_FOLDER = Path(__file__).resolve().parent / 'results'

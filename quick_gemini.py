@@ -3,11 +3,12 @@ import sys
 import subprocess
 from dotenv import load_dotenv
 from google import genai
+from utils.bifrost_config import get_config
 
 # Load environment variables
 load_dotenv()
 
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '').replace('\ufeff', '').strip()
+GEMINI_API_KEY = get_config('GEMINI_API_KEY', '').replace('\ufeff', '').strip()
 if not GEMINI_API_KEY:
     print("Error: GEMINI_API_KEY is missing from your .env file.")
     sys.exit(1)

@@ -5,8 +5,9 @@ from google import genai
 from google.genai import types
 
 from dotenv import load_dotenv
+from utils.bifrost_config import get_config
 load_dotenv('/Users/nicksng/code/random/.env')
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+GEMINI_API_KEY = get_config('GEMINI_API_KEY')
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 async def describe_dir(dir_path):

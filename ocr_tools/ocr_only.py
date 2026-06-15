@@ -41,12 +41,13 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
+from utils.bifrost_config import get_config
 
 load_dotenv()
 
 # ── Config ────────────────────────────────────────────────────────────────────
 PROJECT_DIR = Path(__file__).resolve().parent.parent
-GOOGLE_APPLICATION_CREDENTIALS = os.getenv(
+GOOGLE_APPLICATION_CREDENTIALS = get_config(
     'GOOGLE_APPLICATION_CREDENTIALS', str(PROJECT_DIR / 'credentials.json')
 )
 OUTPUT_FOLDER = Path(__file__).resolve().parent / 'results'

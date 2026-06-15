@@ -5,10 +5,11 @@ import time
 import yaml
 from typing import Dict, Any, Optional, List
 from dotenv import load_dotenv
+from utils.bifrost_config import get_config
 
 load_dotenv()
 
-API_KEY = os.getenv("TMDB_API_KEY")
+API_KEY = get_config("TMDB_API_KEY")
 BASE_URL = "https://api.themoviedb.org/3"
 IMAGE_BASE = "https://image.tmdb.org/t/p/w500"
 

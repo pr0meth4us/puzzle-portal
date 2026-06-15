@@ -9,12 +9,13 @@ from google import genai
 from google.genai import types
 
 from dotenv import load_dotenv
+from utils.bifrost_config import get_config
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parent
 load_dotenv(PROJECT_DIR / '.env')
 
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+GEMINI_API_KEY = get_config('GEMINI_API_KEY')
 
 PROMPT = """You are a master puzzle router. Look at the image provided and classify it into EXACTLY ONE of the following categories:
 

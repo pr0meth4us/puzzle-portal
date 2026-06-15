@@ -2,7 +2,6 @@
 import os
 import sys
 import time
-os.environ['GRPC_ENABLE_FORK_SUPPORT'] = 'False'
 import json
 import asyncio
 import subprocess
@@ -11,24 +10,22 @@ from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = SCRIPT_DIR.parent
+sys.path.append(str(PROJECT_DIR))
+
+from utils.bifrost_config import get_config
+os.environ['GRPC_ENABLE_FORK_SUPPORT'] = 'False'
+
 from google.cloud import vision
 from google import genai
 from google.genai import types
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_DIR = SCRIPT_DIR.parent
-
-sys.path.append(str(PROJECT_DIR))
-from bifrost_local import load_bifrost_config
-
-# Load from Bifrost using local .env credentials
-load_bifrost_config(PROJECT_DIR / '.env')
-
-GOOGLE_APPLICATION_CREDENTIALS = os.getenv(
+GOOGLE_APPLICATION_CREDENTIALS = get_config(
     'GOOGLE_APPLICATION_CREDENTIALS',
     str(PROJECT_DIR / 'credentials.json')
 )
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+GEMINI_API_KEY = get_config('GEMINI_API_KEY')
 
 IMAGE_FOLDER = SCRIPT_DIR / 'khmer_test_images'
 OUTPUT_FOLDER = SCRIPT_DIR / 'results'

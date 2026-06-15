@@ -2,6 +2,7 @@ import os
 import json
 import requests
 from dotenv import load_dotenv
+from utils.bifrost_config import get_config
 
 load_dotenv()
 
@@ -151,8 +152,8 @@ def build_playlist(item, headers, index, total):
 
 
 def fetch_user_playlists():
-    client_id = os.getenv("SPOTIFY_CLIENT_ID")
-    client_secret = os.getenv("SPOTIFY_CLIENT_SECRET")
+    client_id = get_config("SPOTIFY_CLIENT_ID")
+    client_secret = get_config("SPOTIFY_CLIENT_SECRET")
 
     # if not client_id or not client_secret:
     #     print("Error: SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET missing from .env")
