@@ -60,11 +60,13 @@ def copy_to_clipboard(text):
 def setup():
     os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = GOOGLE_APPLICATION_CREDENTIALS
     vision_client = vision.ImageAnnotatorClient()
-    # Initialize the Vertex AI GenAI Client
+    # Initialize the Vertex AI GenAI Client - project loaded from Bifrost via .env
+    vertex_project = os.getenv("VERTEX_AI_PROJECT", "khmer-ocr-496606")
+    vertex_location = os.getenv("VERTEX_AI_LOCATION", "asia-southeast1")
     return vision_client, genai.Client(
         vertexai=True, 
-        project="khmer-ocr-496606", 
-        location="asia-southeast1"
+        project=vertex_project, 
+        location=vertex_location
     )
 
 def get_newest_image():
