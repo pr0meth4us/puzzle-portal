@@ -77,6 +77,7 @@ _KHMER_FONT_CANDIDATES = [
     "/Library/Fonts/NotoSansKhmer-Bold.ttf",
     "/Library/Fonts/NotoSansKhmer-Regular.ttf",
     os.path.expanduser("~/Library/Fonts/NotoSansKhmer-Bold.ttf"),
+    os.path.expanduser("~/Library/Fonts/NotoSansKhmer[wdth,wght].ttf"),
     "/usr/local/share/fonts/NotoSansKhmer-Bold.ttf",
     os.path.expanduser("~/.fonts/NotoSansKhmer-Bold.ttf"),
     os.path.expanduser("~/.local/share/fonts/NotoSansKhmer-Bold.ttf"),
@@ -192,45 +193,69 @@ def _find_separator(profile: np.ndarray, axis_len: int):
 
 def auto_slice(img: np.ndarray):
     h, w = img.shape[:2]
-    portrait = h > w
-
-    if portrait:
-        gray    = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        profile = gray.mean(axis=1)
-        sep     = _find_separator(profile, h)
-        if sep is not None:
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    
+    # 1. Search Horizontal Cuts
+    prof_y = gray.mean(axis=1)
+    lo, hi = int(h * 0.15), int(h * 0.85)
+    smoothed_y = np.convolve(prof_y, np.ones(10)/10, mode='same')
+    
+    best_score_h = -1.0
+    best_sep_h = -1
+    best_a_h, best_b_h = None, None
+    best_astart_h, best_bstart_h = 0, 0
+    
+    for sep in range(lo, hi):
+        if smoothed_y[sep] > smoothed_y[sep-2] and smoothed_y[sep] > smoothed_y[sep+2]:
             a, b = img[:sep], img[sep:]
-        else:
-            half = h // 2
-            a, b = img[:half], img[h - half:]
-            sep  = half
-            print("[INFO] No separator — falling back to h//2 cut")
-    else:
-        gray    = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        profile = gray.mean(axis=0)
-        sep     = _find_separator(profile, w)
-        if sep is not None:
+            min_h = min(a.shape[0], b.shape[0])
+            a_crop = a[-min_h:]
+            b_crop = b[:min_h]
+            score = _ssim(a_crop, b_crop)
+            if score > best_score_h:
+                best_score_h = score
+                best_sep_h = sep
+                best_a_h, best_b_h = a_crop, b_crop
+                best_astart_h = sep - min_h
+                best_bstart_h = sep
+
+    # 2. Search Vertical Cuts
+    prof_x = gray.mean(axis=0)
+    lo, hi = int(w * 0.15), int(w * 0.85)
+    smoothed_x = np.convolve(prof_x, np.ones(10)/10, mode='same')
+    
+    best_score_v = -1.0
+    best_sep_v = -1
+    best_a_v, best_b_v = None, None
+    best_astart_v, best_bstart_v = 0, 0
+    
+    for sep in range(lo, hi):
+        if smoothed_x[sep] > smoothed_x[sep-2] and smoothed_x[sep] > smoothed_x[sep+2]:
             a, b = img[:, :sep], img[:, sep:]
-        else:
-            half = w // 2
-            a, b = img[:, :half], img[:, w - half:]
-            sep  = half
-            print("[INFO] No separator — falling back to w//2 cut")
+            min_w = min(a.shape[1], b.shape[1])
+            a_crop = a[:, -min_w:]
+            b_crop = b[:, :min_w]
+            score = _ssim(a_crop, b_crop)
+            if score > best_score_v:
+                best_score_v = score
+                best_sep_v = sep
+                best_a_v, best_b_v = a_crop, b_crop
+                best_astart_v = sep - min_w
+                best_bstart_v = sep
 
-    if portrait:
-        min_h   = min(a.shape[0], b.shape[0])
-        a_start = sep - min_h
-        b_start = sep
-        a, b    = a[-min_h:], b[:min_h]
+    # Compare horizontal vs vertical
+    if best_score_h >= best_score_v and best_score_h > 0:
+        print(f"[INFO] Auto-sliced (Horizontal) → A{best_a_h.shape[:2]} B{best_b_h.shape[:2]} (SSIM {best_score_h:.2f} >= {best_score_v:.2f})")
+        return best_a_h, best_b_h, best_astart_h, best_bstart_h
+    elif best_score_v > best_score_h and best_score_v > 0:
+        print(f"[INFO] Auto-sliced (Vertical) → A{best_a_v.shape[:2]} B{best_b_v.shape[:2]} (SSIM {best_score_v:.2f} > {best_score_h:.2f})")
+        return best_a_v, best_b_v, best_astart_v, best_bstart_v
     else:
-        min_w   = min(a.shape[1], b.shape[1])
-        a_start = sep - min_w
-        b_start = sep
-        a, b    = a[:, -min_w:], b[:, :min_w]
-
-    print(f"[INFO] Auto-sliced → A{a.shape[:2]}  B{b.shape[:2]}  "
-          f"a_start={a_start}  b_start={b_start}")
-    return a, b, a_start, b_start
+        # Fallback if no peaks found (e.g. solid color)
+        half = h // 2
+        print("[WARN] No valid separators found! Falling back to horizontal mid-cut.")
+        a, b = img[:half], img[half:]
+        return a, b, 0, half
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -391,26 +416,46 @@ def align(ref, tgt, skip_ecc=True):
 def _auto_threshold(deltas, floor):
     if len(deltas) < 3:
         return floor, "too few candidates — using floor"
-    s = sorted(deltas)
-    if s[0] >= floor:
-        if len(s) >= 3 and s[0] < floor + 6 and s[1] > 2.5 * s[0]:
-            t = (s[0] + s[1]) / 2.0
-            return t, f"near-floor outlier {s[0]:.1f} vs next {s[1]:.1f}"
-        return floor, f"all deltas above floor {floor:.1f}"
+    
+    s = np.array(sorted(deltas))
+    
+    # 1D 2-Means clustering to separate noise from true diffs
+    c1 = float(np.percentile(s, 25))
+    c2 = float(np.percentile(s, 75))
+    
+    for _ in range(10):
+        g1 = s[np.abs(s - c1) < np.abs(s - c2)]
+        g2 = s[np.abs(s - c1) >= np.abs(s - c2)]
+        if len(g1) == 0 or len(g2) == 0:
+            break
+        new_c1 = float(np.mean(g1))
+        new_c2 = float(np.mean(g2))
+        if new_c1 == c1 and new_c2 == c2:
+            break
+        c1, c2 = new_c1, new_c2
+        
+    g1 = s[np.abs(s - c1) < np.abs(s - c2)]
+    g2 = s[np.abs(s - c1) >= np.abs(s - c2)]
+    
+    if len(g1) > 0 and len(g2) > 0:
+        max_g1 = float(np.max(g1))
+        min_g2 = float(np.min(g2))
+        t = (max_g1 + min_g2) / 2.0
+        
+        # Only drop the lower cluster if it looks like actual alignment noise
+        if max_g1 < 25 and t >= floor:
+            return t, f"2-means clustering split at {t:.1f}, dropping {len(g1)} noise contour(s)"
+            
+    # Fallback to looking for a significant gap
     gaps = [s[i+1] - s[i] for i in range(len(s)-1)]
-    top2 = sorted(gaps, reverse=True)[:2]
-    idx  = int(np.argmax(gaps))
-    nc   = idx + 1
-    sc   = len(s) - nc
-    dominant = (
-        top2[0] > 20.0
-        and (len(top2) < 2 or top2[0] >= 1.4 * top2[1])
-        and nc >= 1 and sc >= 1
-    )
-    if dominant:
-        t = (s[idx] + s[idx+1]) / 2.0
-        return t, f"dominant gap {s[idx]:.1f}→{s[idx+1]:.1f}, dropping {nc} noise contour(s)"
-    return floor, f"no dominant gap — keeping all above floor {floor:.1f}"
+    if not gaps:
+        return floor, "no gaps"
+    idx = int(np.argmax(gaps))
+    t = (s[idx] + s[idx+1]) / 2.0
+    if gaps[idx] > 10.0 and t >= floor and s[idx] < 25:
+        return t, f"fallback gap {s[idx]:.1f}→{s[idx+1]:.1f}"
+        
+    return floor, f"no clear split — keeping all above floor {floor:.1f}"
 
 
 def _lab_delta_map(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -1153,7 +1198,7 @@ def main():
         H_align       = None
         print("[INFO] Alignment skipped (--no-align)")
     else:
-        img_b_aligned, valid_y_range, H_align = align(img_a, img_b, skip_ecc=not args.ecc)
+        img_b_aligned, valid_y_range, H_align = align(img_a, img_b, skip_ecc=False)
 
     if args.mode == "auto":
         line_mode = is_line_drawing(img_a)

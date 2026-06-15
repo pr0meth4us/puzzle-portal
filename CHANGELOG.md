@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **Centralized Config**: Integrated `bifrost_config.py` SDK for securely fetching API keys and configurations directly from the Bifrost Remote Config Server over HTTPS.
+
+### Added
 - Created `social_tools/run_scheduler.py` to run the TikTok Streak Keeper daily at 12:02 AM inside persistent containers.
 - Created `Dockerfile` in the workspace root for containerized deployment (e.g. on Koyeb).
 - Created `social_tools/tiktok_streak_keeper.py`, a browser automation utility using Playwright to automatically detect and message all friends with active streaks (or specified friends) to maintain them.

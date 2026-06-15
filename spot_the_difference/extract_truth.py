@@ -1,0 +1,27 @@
+import os
+import asyncio
+from pathlib import Path
+from google import genai
+from google.genai import types
+
+from dotenv import load_dotenv
+load_dotenv('/Users/nicksng/code/random/.env')
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+client = genai.Client(api_key=GEMINI_API_KEY)
+
+async def main():
+    val_dir = Path('/Users/nicksng/code/random/spot_the_difference/validation_dataset')
+    answers = sorted(val_dir.glob('answer_*.jpg'))
+    for ans in answers:
+        with open(ans, 'rb') as f: data = f.read()
+        response = await client.aio.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[
+                "This is an answer key for a 'spot the difference' puzzle. How many differences are circled or indicated? Respond with ONLY a single integer.",
+                types.Part.from_bytes(data=data, mime_type="image/jpeg")
+            ]
+        )
+        print(f"{ans.name}: {response.text.strip()}")
+
+if __name__ == '__main__':
+    asyncio.run(main())
