@@ -37,3 +37,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `ocr_tools/main.py`
 - Fixed macOS clipboard compatibility in `ocr_tools/main.py` using `pbcopy`.
 - Updated `.gitignore` to match the newly organized directory structure.
+
+## [Unreleased]
+### Added
+- Migrated `ocr_tools/main.py` from Google AI Studio to Google Cloud Vertex AI SDK.

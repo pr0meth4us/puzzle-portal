@@ -60,8 +60,12 @@ def copy_to_clipboard(text):
 def setup():
     os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = GOOGLE_APPLICATION_CREDENTIALS
     vision_client = vision.ImageAnnotatorClient()
-    # Initializing the standard GenAI Client
-    return vision_client, genai.Client(api_key=GEMINI_API_KEY)
+    # Initialize the Vertex AI GenAI Client
+    return vision_client, genai.Client(
+        vertexai=True, 
+        project="khmer-ocr-496606", 
+        location="asia-southeast1"
+    )
 
 def get_newest_image():
     images = (
