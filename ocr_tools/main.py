@@ -18,7 +18,11 @@ from google.genai import types
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parent
 
-load_dotenv(dotenv_path=PROJECT_DIR / '.env')
+sys.path.append(str(PROJECT_DIR))
+from bifrost_local import load_bifrost_config
+
+# Load from Bifrost using local .env credentials
+load_bifrost_config(PROJECT_DIR / '.env')
 
 GOOGLE_APPLICATION_CREDENTIALS = os.getenv(
     'GOOGLE_APPLICATION_CREDENTIALS',
