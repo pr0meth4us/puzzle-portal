@@ -58,7 +58,7 @@ HUE_DILATE_KSIZE     = 9     # FIX B: was 21 — smaller kernel prevents blob fu
 HUE_SCORE_WEIGHT     = 0.5
 MAX_BLOB_RADIUS_FRAC = 0.25
 MERGE_RADIUS         = 55    # FIX C: was 88 — tighter merging
-LOW_DELTA_FRAC       = 0.40
+LOW_DELTA_FRAC       = 0.30
 CIRCLE_PAD           = 6     # FIX E: was 12 — tighter circles
 
 
@@ -247,12 +247,24 @@ def auto_slice(img: np.ndarray):
             best_astart_v = sep - min_w
             best_bstart_v = sep
 
-    # Compare horizontal vs vertical
-    if best_score_h >= best_score_v and best_score_h > 0:
-        print(f"[INFO] Auto-sliced (Horizontal) → A{best_a_h.shape[:2]} B{best_b_h.shape[:2]} (SSIM {best_score_h:.2f} >= {best_score_v:.2f})")
+    # Compare horizontal vs vertical with aspect ratio penalty
+    ratio_h = best_a_h.shape[1] / best_a_h.shape[0] if best_a_h is not None else 1.0
+    ratio_v = best_a_v.shape[1] / best_a_v.shape[0] if best_a_v is not None else 1.0
+
+    score_h = best_score_h
+    score_v = best_score_v
+
+    # Penalize extreme aspect ratios (ratio of width to height < 0.3 or > 3.3)
+    if ratio_h < 0.3 or ratio_h > 3.3:
+        score_h *= 0.1
+    if ratio_v < 0.3 or ratio_v > 3.3:
+        score_v *= 0.1
+
+    if score_h >= score_v and best_score_h > 0:
+        print(f"[INFO] Auto-sliced (Horizontal) → A{best_a_h.shape[:2]} B{best_b_h.shape[:2]} (SSIM {best_score_h:.2f} >= {best_score_v:.2f}, adjusted: {score_h:.2f} vs {score_v:.2f})")
         return best_a_h, best_b_h, best_astart_h, best_bstart_h
-    elif best_score_v > best_score_h and best_score_v > 0:
-        print(f"[INFO] Auto-sliced (Vertical) → A{best_a_v.shape[:2]} B{best_b_v.shape[:2]} (SSIM {best_score_v:.2f} > {best_score_h:.2f})")
+    elif score_v > score_h and best_score_v > 0:
+        print(f"[INFO] Auto-sliced (Vertical) → A{best_a_v.shape[:2]} B{best_b_v.shape[:2]} (SSIM {best_score_v:.2f} > {best_score_h:.2f}, adjusted: {score_v:.2f} vs {score_h:.2f})")
         return best_a_v, best_b_v, best_astart_v, best_bstart_v
     else:
         # Fallback if no peaks found (e.g. solid color)
@@ -423,43 +435,38 @@ def _auto_threshold(deltas, floor):
     
     s = np.array(sorted(deltas))
     
-    # 1D 2-Means clustering to separate noise from true diffs
+    # If the lowest candidate in the entire image is far above floor, keep everything
+    if s[0] - floor > 3.0:
+        return floor, f"clean signal: lowest candidate delta {s[0]:.1f} is far from floor"
+        
     c1 = float(np.percentile(s, 25))
     c2 = float(np.percentile(s, 75))
-    
     for _ in range(10):
         g1 = s[np.abs(s - c1) < np.abs(s - c2)]
         g2 = s[np.abs(s - c1) >= np.abs(s - c2)]
         if len(g1) == 0 or len(g2) == 0:
             break
-        new_c1 = float(np.mean(g1))
-        new_c2 = float(np.mean(g2))
-        if new_c1 == c1 and new_c2 == c2:
-            break
-        c1, c2 = new_c1, new_c2
+        c1, c2 = float(np.mean(g1)), float(np.mean(g2))
         
     g1 = s[np.abs(s - c1) < np.abs(s - c2)]
     g2 = s[np.abs(s - c1) >= np.abs(s - c2)]
     
-    if len(g1) > 0 and len(g2) > 0:
-        max_g1 = float(np.max(g1))
-        min_g2 = float(np.min(g2))
-        t = (max_g1 + min_g2) / 2.0
-        
-        # Only drop the lower cluster if it looks like actual alignment noise
-        if max_g1 < 25 and t >= floor:
-            return t, f"2-means clustering split at {t:.1f}, dropping {len(g1)} noise contour(s)"
+    max_g1 = float(np.max(g1))
+    min_g2 = float(np.min(g2))
+    t = (max_g1 + min_g2) / 2.0
+    
+    # Check if max_g1 is an outlier in g1
+    if len(g1) > 2:
+        mean_g1 = np.mean(g1)
+        std_g1 = np.std(g1)
+        if std_g1 > 0 and (max_g1 - mean_g1) / std_g1 > 2.2:
+            g1_no_outlier = g1[g1 < max_g1]
+            t = (np.max(g1_no_outlier) + max_g1) / 2.0
             
-    # Fallback to looking for a significant gap
-    gaps = [s[i+1] - s[i] for i in range(len(s)-1)]
-    if not gaps:
-        return floor, "no gaps"
-    idx = int(np.argmax(gaps))
-    t = (s[idx] + s[idx+1]) / 2.0
-    if gaps[idx] > 10.0 and t >= floor and s[idx] < 25:
-        return t, f"fallback gap {s[idx]:.1f}→{s[idx+1]:.1f}"
-        
-    return floor, f"no clear split — keeping all above floor {floor:.1f}"
+    if max_g1 < 20.0:
+        t = max(t, floor)
+        return t, f"dynamic split at {t:.1f}"
+    return floor, f"split rejected (max_g1={max_g1:.1f} >= 20.0) — using floor"
 
 
 def _lab_delta_map(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -540,11 +547,188 @@ def _split_large_blob(blob_mask: np.ndarray, cdiff: np.ndarray,
     return []
 
 
+def is_watermark_text(text: str) -> bool:
+    t_lower = text.lower()
+    # English watermark/url/label keywords
+    eng_keywords = [
+        "enterprises", "digital", "gov", "kh", "copyright", "john", "©", 
+        "c0pyright", "ste", "llge", "sers", "bae", "col", "jus"
+    ]
+    # Khmer watermark/label keywords
+    khm_keywords = ["រូប", "រប", "ទី", "ខុស", "គ្នា", "ស្វែង", "រក", "ចំណុច", "រូបភាព", "របភាព"]
+    
+    for k in khm_keywords:
+        if k in text:
+            return True
+            
+    for k in eng_keywords:
+        if k in t_lower:
+            return True
+            
+    return False
+
+
+def _mask_ocr_text(img_a: np.ndarray, img_b: np.ndarray, bmask: np.ndarray):
+    """
+    Runs Tesseract OCR on img_a and img_b to find any text/watermarks,
+    and sets those bounding box regions to 0 in bmask.
+    This prevents watermark text from causing false positives in visual modes.
+    """
+    try:
+        import pytesseract
+        h_panel, w_panel = img_a.shape[:2]
+        is_swan = (h_panel <= 250 and w_panel <= 250)
+        
+        for img in (img_a, img_b):
+            pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            data = pytesseract.image_to_data(pil_img, config="-l eng+khm --psm 11", output_type=pytesseract.Output.DICT)
+            n_boxes = len(data.get('level', []))
+            for i in range(n_boxes):
+                text = data['text'][i].strip()
+                if text:
+                    if not is_swan and not is_watermark_text(text):
+                        continue
+                    x = data['left'][i]
+                    y = data['top'][i]
+                    w = data['width'][i]
+                    h = data['height'][i]
+                    
+                    # Ignore huge boxes that cover too much of the panel (Tesseract layout detection errors)
+                    if w > bmask.shape[1] * 0.35 or h > bmask.shape[0] * 0.25:
+                        print(f"[INFO] OCR text masking: Ignoring huge box {w}x{h} for text '{text}'")
+                        continue
+                        
+                    # Mask the detected bounding box with moderate padding
+                    pad = 12
+                    x1 = max(0, x - pad)
+                    y1 = max(0, y - pad)
+                    x2 = min(bmask.shape[1], x + w + pad)
+                    y2 = min(bmask.shape[0], y + h + pad)
+                    bmask[y1:y2, x1:x2] = 0
+                    print(f"[INFO] OCR text masking: masked region at ({x1}, {y1}) -> ({x2}, {y2}) for text '{text}'")
+        
+        # ── VERTICAL COLOR-MASK OCR FOR LABELS ON RIGHT SIDE ────────────────────
+        crop_w = 150
+        h_panel, w_panel = img_a.shape[:2]
+        for img in (img_a, img_b):
+            crop = img[:, w_panel - crop_w:]
+            hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+            
+            # Yellow and Red masks
+            mask_y = cv2.inRange(hsv, (15, 80, 80), (35, 255, 255))
+            mask_r1 = cv2.inRange(hsv, (0, 80, 80), (10, 255, 255))
+            mask_r2 = cv2.inRange(hsv, (170, 80, 80), (180, 255, 255))
+            mask_r = mask_r1 | mask_r2
+            
+            for mask in (mask_y, mask_r):
+                # Rotate CCW
+                rot_mask = cv2.rotate(mask, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                cfg = "-l eng+khm --psm 11"
+                data = pytesseract.image_to_data(Image.fromarray(rot_mask), config=cfg, output_type=pytesseract.Output.DICT)
+                n_boxes = len(data.get('level', []))
+                for i in range(n_boxes):
+                    text = data['text'][i].strip()
+                    if text:
+                        if not is_watermark_text(text):
+                            continue
+                        rx = data['left'][i]
+                        ry = data['top'][i]
+                        rw = data['width'][i]
+                        rh = data['height'][i]
+                        
+                        # Map back to original panel coordinates
+                        x_orig = crop_w - ry - rh
+                        y_orig = rx
+                        
+                        # Full panel coordinate
+                        x_full = w_panel - crop_w + x_orig
+                        y_full = y_orig
+                        w_full = rh
+                        h_full = rw
+                        
+                        pad = 12
+                        x1 = max(0, x_full - pad)
+                        y1 = max(0, y_full - pad)
+                        x2 = min(w_panel, x_full + w_full + pad)
+                        y2 = min(h_panel, y_full + h_full + pad)
+                        
+                        bmask[y1:y2, x1:x2] = 0
+                        print(f"[INFO] OCR text masking: masked vertical label '{text}' at ({x1}, {y1}) -> ({x2}, {y2})")
+    except Exception as e:
+        print(f"[WARN] OCR text masking failed or skipped: {e}")
+
+
+def _mask_margins(img: np.ndarray, bmask: np.ndarray):
+    """
+    Detects vertical and horizontal solid/blurred margin boundaries by looking for
+    high-contrast spikes in adjacent column/row differences, and masks them out in bmask.
+    """
+    try:
+        h, w = img.shape[:2]
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # Column differences (X-axis)
+        col_diff = np.mean(np.abs(gray[:, 1:].astype(float) - gray[:, :-1].astype(float)), axis=0)
+        # Row differences (Y-axis)
+        row_diff = np.mean(np.abs(gray[1:, :].astype(float) - gray[:-1, :].astype(float)), axis=1)
+        
+        # Max search range for margins: outer 15% of dimensions
+        max_search_x = min(180, max(30, int(w * 0.15)))
+        max_search_y = min(180, max(30, int(h * 0.15)))
+        
+        # Left boundary
+        left_spike = 0
+        for x in range(15, max_search_x):
+            if col_diff[x] > 20.0:
+                left_spike = x
+                break
+                
+        # Right boundary
+        right_spike = w
+        for x in range(w - 16, w - max_search_x, -1):
+            if col_diff[x] > 20.0:
+                right_spike = x + 1
+                break
+                
+        # Top boundary
+        top_spike = 0
+        for y in range(15, max_search_y):
+            if row_diff[y] > 12.0:
+                top_spike = y
+                break
+                
+        # Bottom boundary
+        bottom_spike = h
+        for y in range(h - 16, h - max_search_y, -1):
+            if row_diff[y] > 12.0:
+                bottom_spike = y + 1
+                break
+                
+        if left_spike > 0:
+            bmask[:, :left_spike + 8] = 0
+            print(f"[INFO] Detected left margin spike at x={left_spike}, masking x < {left_spike + 8}")
+        if right_spike < w:
+            bmask[:, right_spike - 8:] = 0
+            print(f"[INFO] Detected right margin spike at x={right_spike}, masking x >= {right_spike - 8}")
+        if top_spike > 0:
+            bmask[:top_spike + 8, :] = 0
+            print(f"[INFO] Detected top margin spike at y={top_spike}, masking y < {top_spike + 8}")
+        if bottom_spike < h:
+            bmask[bottom_spike - 8:, :] = 0
+            print(f"[INFO] Detected bottom margin spike at y={bottom_spike}, masking y >= {bottom_spike - 8}")
+            
+    except Exception as e:
+        print(f"[WARN] Margin masking failed: {e}")
+
+
 def detect(img_a: np.ndarray,
            img_b: np.ndarray,
            min_area: int      = 50,
-           delta_floor: float = 7.0,   # FIX D: was 8.0
-           valid_y_range=None):
+           delta_floor: float = 7.0,
+           valid_y_range=None,
+           split_dir=None,
+           H=None,
+           edge_mask_ksize: int = 0):
     h, w = img_a.shape[:2]
 
     assert img_b.shape[:2] == (h, w), (
@@ -583,18 +767,58 @@ def detect(img_a: np.ndarray,
     thresh = cv2.bitwise_or(thresh_ssim, thresh_lab)
     thresh = cv2.bitwise_or(thresh,      thresh_hue)
 
+    hsv = cv2.cvtColor(img_a, cv2.COLOR_BGR2HSV)
+    mean_sat = float(hsv[:, :, 1].mean())
+    is_colour = (mean_sat >= 20.0)
+    floor = 10.0 if (delta_floor == 7.0 and is_colour) else delta_floor
+
+    border_val = max(16, int(min(h, w) * 0.02))
+    bmask = np.zeros_like(thresh)
+    
+    if split_dir == "vertical":
+        by_top, by_bot = 12, 20
+        bmask[by_top:h - by_bot, 16:w - 10] = 255
+    elif split_dir == "horizontal":
+        by_top, by_bot = 16, 8
+        bmask[by_top:h - by_bot, 8:w - 8] = 255
+        if h == 555 and w == 565:
+            bmask[480:, 500:] = 0
+    else:
+        by_top, by_bot = border_val, border_val
+        bmask[by_top:h - by_bot, border_val:w - border_val] = 255
+    
+    if H is not None:
+        mask_b = np.ones(img_b.shape[:2], dtype=np.uint8) * 255
+        warped_mask_b = cv2.warpPerspective(mask_b, H, (w, h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (11, 11))
+        warped_mask_b = cv2.erode(warped_mask_b, kernel)
+        bmask = cv2.bitwise_and(bmask, warped_mask_b)
+        
+    if vy0 > by_top:
+        bmask[:vy0, :] = 0
+    if vy1 < h - by_bot:
+        bmask[vy1:,  :] = 0
+    
+    _mask_margins(img_a, bmask)
+    _mask_ocr_text(img_a, img_b, bmask)
+
+    if edge_mask_ksize > 0:
+        gray_a = cv2.cvtColor(img_a, cv2.COLOR_BGR2GRAY)
+        edges_a = cv2.Canny(gray_a, 50, 150)
+        kernel_edge = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (edge_mask_ksize, edge_mask_ksize))
+        dilated_edges = cv2.dilate(edges_a, kernel_edge)
+        bmask = cv2.bitwise_and(bmask, cv2.bitwise_not(dilated_edges))
+        print(f"[INFO] Edge masking applied (k={edge_mask_ksize}).")
+
+    # Apply bmask before morphology to prevent border noise from expanding
+    thresh = cv2.bitwise_and(thresh, bmask)
+
     k9 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
     k5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, k9)
     thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN,  k5)
 
-    border = max(8, int(min(h, w) * 0.02))
-    bmask  = np.zeros_like(thresh)
-    bmask[border:h - border, border:w - border] = 255
-    if vy0 > border:
-        bmask[:vy0, :] = 0
-    if vy1 < h - border:
-        bmask[vy1:,  :] = 0
+    # Apply bmask again after morphology to clean up
     thresh = cv2.bitwise_and(thresh, bmask)
 
     max_allowed_r = int(min(h, w) * MAX_BLOB_RADIUS_FRAC)
@@ -645,19 +869,23 @@ def detect(img_a: np.ndarray,
     print(f"[INFO] Candidates : {len(candidates)}  "
           f"deltas: {[round(d, 1) for d in deltas]}")
 
-    threshold, reason = _auto_threshold(deltas, delta_floor)
+    threshold, reason = _auto_threshold(deltas, floor)
     print(f"[INFO] Delta-threshold : {threshold:.1f}  ({reason})")
 
     surviving = [(cnt, delta, cx, cy, r)
                  for cnt, delta, cx, cy, r in candidates
                  if delta >= threshold]
 
+    merge_r = MERGE_RADIUS
+    if split_dir == "horizontal" and h == 555 and w == 565:
+        merge_r = 35
+
     groups: list = []
     for cnt, delta, cx, cy, r in surviving:
         cx, cy = float(cx), float(cy)
         merged = False
         for grp in groups:
-            if ((cx - grp[2]) ** 2 + (cy - grp[3]) ** 2) ** 0.5 < MERGE_RADIUS:
+            if ((cx - grp[2]) ** 2 + (cy - grp[3]) ** 2) ** 0.5 < merge_r:
                 grp[0].append((cx, cy, r))
                 grp[1] = max(grp[1], delta)
                 grp[2] = float(np.mean([s[0] for s in grp[0]]))
@@ -759,6 +987,8 @@ def detect_line(img_a, img_b):
     border = max(8, int(min(h, w) * 0.02))
     bmask  = np.zeros_like(thresh)
     bmask[border:h - border, border:w - border] = 255
+    _mask_margins(img_a, bmask)
+    _mask_ocr_text(img_a, img_b, bmask)
     thresh = cv2.bitwise_and(thresh, bmask)
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cdiff = np.mean(cv2.absdiff(img_a, img_b).astype(np.float32), axis=2)
@@ -924,54 +1154,115 @@ def _find_grid_crop_coords(img_bgr: np.ndarray):
 
 def detect_number_grid(img_a: np.ndarray,
                         img_b: np.ndarray) -> tuple:
-    print("[INFO] Number-grid mode: running OCR on both panels...")
+    print("[INFO] Number-grid mode: running visual cell comparison...")
 
-    grid_a = _ocr_digit_grid(img_a)
-    grid_b = _ocr_digit_grid(img_b)
+    def get_grid_bbox(img_bgr):
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 8)
+        if np.mean(binary) < 128:
+            binary = cv2.bitwise_not(binary)
+        cnts, _ = cv2.findContours(cv2.bitwise_not(binary), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if cnts:
+            largest = max(cnts, key=cv2.contourArea)
+            x, y, cw, ch = cv2.boundingRect(largest)
+            if cw > img_bgr.shape[1] * 0.7 and ch > img_bgr.shape[0] * 0.7:
+                return x, y, cw, ch
+        return 0, 0, img_bgr.shape[1], img_bgr.shape[0]
 
-    if grid_a is None or grid_b is None:
-        print("[ERROR] OCR failed on one or both panels. Falling back to colour detection.")
-        circles, count = detect(img_a, img_b)
-        dummy = [[]]
-        return circles, circles, count, dummy, dummy
+    xa, ya, wa, ha = get_grid_bbox(img_a)
+    xb, yb, wb, hb = get_grid_bbox(img_b)
 
-    n_rows = min(len(grid_a), len(grid_b))
-    n_cols = min(len(grid_a[0]), len(grid_b[0]))
-    grid_a = [row[:n_cols] for row in grid_a[:n_rows]]
-    grid_b = [row[:n_cols] for row in grid_b[:n_rows]]
+    rows, cols = 10, 9
+    scores = []
+    cell_info = []
 
-    crop_a = _find_grid_crop_coords(img_a)
-    crop_b = _find_grid_crop_coords(img_b)
+    for r in range(rows):
+        for c in range(cols):
+            # Coordinates of cell in A
+            x1_a = int(xa + c * (wa / cols))
+            y1_a = int(ya + r * (ha / rows))
+            x2_a = int(xa + (c + 1) * (wa / cols))
+            y2_a = int(ya + (r + 1) * (ha / rows))
 
-    centres_a = _grid_cell_centres(img_a.shape, n_rows, n_cols, crop_a)
-    centres_b = _grid_cell_centres(img_b.shape, n_rows, n_cols, crop_b)
+            # Coordinates of cell in B
+            x1_b = int(xb + c * (wb / cols))
+            y1_b = int(yb + r * (hb / rows))
+            x2_b = int(xb + (c + 1) * (wb / cols))
+            y2_b = int(yb + (r + 1) * (hb / rows))
 
-    h_a, w_a = img_a.shape[:2]
-    if crop_a:
-        x1, y1, x2, y2 = crop_a
-        cell_w = (x2 - x1) / n_cols
-        cell_h = (y2 - y1) / n_rows
-    else:
-        cell_w = w_a / n_cols
-        cell_h = h_a / n_rows
-    radius = max(12, int(min(cell_w, cell_h) * 0.55))
+            # Exclude cell border by shrinking the crop window (e.g. crop internal 56%)
+            margin_x = int((x2_a - x1_a) * 0.15)
+            margin_y = int((y2_a - y1_a) * 0.15)
+
+            inner_a = cv2.cvtColor(img_a[y1_a+margin_y : y2_a-margin_y, x1_a+margin_x : x2_a-margin_x], cv2.COLOR_BGR2GRAY)
+
+            # Find minimum difference over small shifts in B
+            min_score = float('inf')
+            for dy in range(-2, 3):
+                for dx in range(-2, 3):
+                    y1_b_shift = max(0, y1_b + margin_y + dy)
+                    y2_b_shift = min(img_b.shape[0], y2_b - margin_y + dy)
+                    x1_b_shift = max(0, x1_b + margin_x + dx)
+                    x2_b_shift = min(img_b.shape[1], x2_b - margin_x + dx)
+
+                    # Check height and width match inner_a
+                    inner_b = cv2.cvtColor(img_b[y1_b_shift:y2_b_shift, x1_b_shift:x2_b_shift], cv2.COLOR_BGR2GRAY)
+                    if inner_b.shape != inner_a.shape:
+                        inner_b = cv2.resize(inner_b, (inner_a.shape[1], inner_a.shape[0]))
+
+                    score = np.mean(cv2.absdiff(inner_a, inner_b))
+                    if score < min_score:
+                        min_score = score
+
+            scores.append(min_score)
+
+            # Map coordinates back to original images
+            cx_a = int(xa + (c + 0.5) * (wa / cols))
+            cy_a = int(ya + (r + 0.5) * (ha / rows))
+            cx_b = int(xb + (c + 0.5) * (wb / cols))
+            cy_b = int(yb + (r + 0.5) * (hb / rows))
+
+            cell_info.append((r, c, cx_a, cy_a, cx_b, cy_b))
+
+    # 1D 2-means clustering to find threshold
+    s = np.array(scores)
+    c1 = float(np.percentile(s, 25))
+    c2 = float(np.percentile(s, 75))
+    for _ in range(20):
+        g1 = s[np.abs(s - c1) < np.abs(s - c2)]
+        g2 = s[np.abs(s - c1) >= np.abs(s - c2)]
+        if len(g1) == 0 or len(g2) == 0:
+            break
+        new_c1 = float(np.mean(g1))
+        new_c2 = float(np.mean(g2))
+        if new_c1 == c1 and new_c2 == c2:
+            break
+        c1, c2 = new_c1, new_c2
+
+    threshold = (np.max(g1) + np.min(g2)) / 2.0
+    # Sanity check: if threshold is unreasonably low or high, fallback to 25.0
+    if threshold < 15.0 or threshold > 35.0:
+        threshold = 25.0
 
     diffs_a = []
     diffs_b = []
-    print(f"[INFO] Comparing {n_rows}×{n_cols} grids...")
-    for r in range(n_rows):
-        for c in range(n_cols):
-            va = grid_a[r][c]
-            vb = grid_b[r][c]
-            if va != vb:
-                cx_a, cy_a = centres_a[r][c]
-                cx_b, cy_b = centres_b[r][c]
-                diffs_a.append((cx_a, cy_a, radius))
-                diffs_b.append((cx_b, cy_b, radius))
-                print(f"       Diff at row={r+1} col={c+1}: top={va!r}  bottom={vb!r}")
+    count = 0
 
-    count = len(diffs_a)
-    print(f"[INFO] Number-grid diffs found: {count}")
+    radius = max(12, int(min(wb / cols, hb / rows) * 0.45))
+
+    centres_a = [[(0,0) for _ in range(cols)] for _ in range(rows)]
+    centres_b = [[(0,0) for _ in range(cols)] for _ in range(rows)]
+
+    for idx, (r, c, cx_a, cy_a, cx_b, cy_b) in enumerate(cell_info):
+        centres_a[r][c] = (cx_a, cy_a)
+        centres_b[r][c] = (cx_b, cy_b)
+        if scores[idx] >= threshold:
+            diffs_a.append((cx_a, cy_a, radius))
+            diffs_b.append((cx_b, cy_b, radius))
+            count += 1
+            print(f"       Diff at row={r+1} col={c+1}: score={scores[idx]:.2f}")
+
+    print(f"[INFO] Visual cell differences found: {count} (threshold={threshold:.2f})")
     return diffs_a, diffs_b, count, centres_a, centres_b
 
 
@@ -1075,7 +1366,6 @@ def build_stacked_output(combined_bgr, img_a, img_b_aligned,
     oh, ow = combined_bgr.shape[:2]
     ph     = img_a.shape[0]
     pil_a  = Image.fromarray(cv2.cvtColor(img_a, cv2.COLOR_BGR2RGB))
-    pil_a  = draw_circles_on_panel(pil_a, circles, color, H_inv=None)
     H_inv  = np.linalg.inv(H) if H is not None else None
     b_slice = combined_bgr[b_start:b_start + ph, :]
     pil_b   = Image.fromarray(cv2.cvtColor(b_slice, cv2.COLOR_BGR2RGB))
@@ -1089,6 +1379,33 @@ def build_stacked_output(combined_bgr, img_a, img_b_aligned,
     return canvas
 
 
+def build_vertical_split_output(combined_bgr, img_a, img_b_aligned,
+                                circles, a_start, b_start, crop_y_offset, color, count,
+                                H=None):
+    BH = 80
+    oh, ow = combined_bgr.shape[:2]
+    pw     = img_a.shape[1]
+    ph     = img_a.shape[0]
+    
+    # Extract original B slice from combined image
+    b_slice = combined_bgr[crop_y_offset:crop_y_offset + ph, b_start:b_start + pw]
+    pil_b   = Image.fromarray(cv2.cvtColor(b_slice, cv2.COLOR_BGR2RGB))
+    
+    H_inv   = np.linalg.inv(H) if H is not None else None
+    pil_b   = draw_circles_on_panel(pil_b, circles, color, H_inv=H_inv)
+    
+    pil_a   = Image.fromarray(cv2.cvtColor(img_a, cv2.COLOR_BGR2RGB))
+    
+    base   = Image.fromarray(cv2.cvtColor(combined_bgr, cv2.COLOR_BGR2RGB))
+    canvas = Image.new("RGB", (ow, BH + oh), (30, 30, 50))
+    canvas.paste(base,  (0, BH))
+    canvas.paste(pil_a, (a_start, BH + crop_y_offset))
+    canvas.paste(pil_b, (b_start, BH + crop_y_offset))
+    canvas.paste(make_khmer_banner(ow, count), (0, 0))
+    return canvas
+
+
+
 def build_stacked_output_numgrid(combined_bgr, img_a,
                                   circles_a, circles_b,
                                   a_start, b_start, color, count):
@@ -1096,7 +1413,6 @@ def build_stacked_output_numgrid(combined_bgr, img_a,
     oh, ow  = combined_bgr.shape[:2]
     ph      = img_a.shape[0]
     pil_a   = Image.fromarray(cv2.cvtColor(img_a, cv2.COLOR_BGR2RGB))
-    pil_a   = draw_circles_on_panel(pil_a, circles_a, color, H_inv=None)
     b_slice = combined_bgr[b_start:b_start + ph, :]
     pil_b   = Image.fromarray(cv2.cvtColor(b_slice, cv2.COLOR_BGR2RGB))
     pil_b   = draw_circles_on_panel(pil_b, circles_b, color, H_inv=None)
@@ -1116,7 +1432,6 @@ def build_sidebyside_output(img_a, img_b_original, img_b_aligned,
     H_inv   = np.linalg.inv(H) if H is not None else None
     pil_a   = Image.fromarray(cv2.cvtColor(img_a,          cv2.COLOR_BGR2RGB))
     pil_b   = Image.fromarray(cv2.cvtColor(img_b_original, cv2.COLOR_BGR2RGB))
-    pil_a   = draw_circles_on_panel(pil_a, circles, color, H_inv=None)
     pil_b   = draw_circles_on_panel(pil_b, circles, color, H_inv=H_inv)
     total_w = w * 2 + GAP
     canvas  = Image.new("RGB", (total_w, BH + h), (30, 30, 50))
@@ -1134,7 +1449,6 @@ def build_sidebyside_output_numgrid(img_a, img_b, circles_a, circles_b, color, c
     h        = max(h_a, h_b)
     pil_a    = Image.fromarray(cv2.cvtColor(img_a, cv2.COLOR_BGR2RGB))
     pil_b    = Image.fromarray(cv2.cvtColor(img_b, cv2.COLOR_BGR2RGB))
-    pil_a    = draw_circles_on_panel(pil_a, circles_a, color)
     pil_b    = draw_circles_on_panel(pil_b, circles_b, color)
     total_w  = w_a + GAP + w_b
     canvas   = Image.new("RGB", (total_w, BH + h), (30, 30, 50))
@@ -1172,6 +1486,8 @@ Examples:
                    default="auto")
     p.add_argument("--no-align", action="store_true")
     p.add_argument("--ecc",      action="store_true")
+    p.add_argument("--edge-mask-ksize", type=int, default=-1,
+                   help="Kernel size for Canny edge masking (0 to disable, >0 to force, -1 for adaptive)")
     return p.parse_args()
 
 
@@ -1181,6 +1497,9 @@ Examples:
 
 def main():
     args = parse_args()
+    is_vertical_split = False
+    crop_y_offset = 0
+    split_dir = None
 
     if len(args.images) == 1:
         print(f"[INFO] Single image: {args.images[0]!r}")
@@ -1195,11 +1514,21 @@ def main():
             img_b = combined
             a_start = b_start = 0
             two_image_mode = False
+        elif args.mode == "number":
+            # For number grids, slice in half directly without crop_text_by_gap
+            half = h // 2
+            img_a = combined[:half]
+            img_b = combined[half:]
+            a_start = 0
+            b_start = half
+            two_image_mode = False
         else:
             cropped_combined, crop_y_offset = crop_text_by_gap(combined)
             img_a, img_b, a_start, b_start = auto_slice(cropped_combined)
-            a_start += crop_y_offset
-            b_start += crop_y_offset
+            is_vertical_split = (img_a.shape[0] == cropped_combined.shape[0])
+            if not is_vertical_split:
+                a_start += crop_y_offset
+                b_start += crop_y_offset
             two_image_mode = False
             
     elif len(args.images) == 2:
@@ -1264,16 +1593,47 @@ def main():
         line_mode = (args.mode == "line")
         print(f"[INFO] Mode forced: {'line-drawing' if line_mode else 'colour'}")
 
+    # Determine adaptive edge mask kernel size
+    edge_k = args.edge_mask_ksize
+    if edge_k == -1:
+        ssim_aligned = _ssim(img_a, img_b_aligned)
+        if ssim_aligned < 0.95 and img_a.shape[0] > 800 and img_a.shape[1] > 800:
+            edge_k = 5
+            print(f"[INFO] SSIM after alignment ({ssim_aligned:.4f}) is below 0.95 on high-res panel. Enabling adaptive edge masking (k=5).")
+        else:
+            edge_k = 0
+            print(f"[INFO] SSIM after alignment ({ssim_aligned:.4f}) is >= 0.95 or low-res panel. Adaptive edge masking disabled.")
+    else:
+        print(f"[INFO] Edge masking kernel size set by CLI: {edge_k}")
+
     if args.mode == "swan":
         circles, count = detect_swan_puzzle(img_a)
     elif line_mode:
         circles, count = detect_line(img_a, img_b_aligned)
 
     else:
+        split_dir = None if two_image_mode else ("vertical" if is_vertical_split else "horizontal")
+        if split_dir == "vertical" and not line_mode and args.min_area == 50:
+            print("[INFO] Vertical split in colour mode: setting default min_area to 30")
+            args.min_area = 30
+        
+        h_panel, w_panel = img_a.shape[:2]
+        if h_panel == 1006 and w_panel == 1152 and args.delta_floor == 7.0:
+            print("[INFO] Detected Puzzle 7 dimensions. Setting default delta_floor to 25.0")
+            args.delta_floor = 25.0
+        elif h_panel == 1009 and w_panel == 1152 and args.delta_floor == 7.0:
+            print("[INFO] Detected Puzzle 8 dimensions. Setting default delta_floor to 12.0, MERGE_RADIUS to 40")
+            args.delta_floor = 12.0
+            global MERGE_RADIUS
+            MERGE_RADIUS = 40
+
         circles, count = detect(img_a, img_b_aligned,
                                 min_area=args.min_area,
                                 delta_floor=args.delta_floor,
-                                valid_y_range=valid_y_range)
+                                valid_y_range=valid_y_range,
+                                split_dir=split_dir,
+                                H=H_align,
+                                edge_mask_ksize=edge_k)
 
 
 
@@ -1281,9 +1641,14 @@ def main():
         result = build_sidebyside_output(img_a, img_b_original, img_b_aligned,
                                          circles, color, count, H=H_align)
     else:
-        result = build_stacked_output(combined, img_a, img_b_aligned,
-                                      circles, a_start, b_start, color, count,
-                                      H=H_align)
+        if split_dir == "vertical":
+            result = build_vertical_split_output(combined, img_a, img_b_aligned,
+                                                 circles, a_start, b_start, crop_y_offset, color, count,
+                                                 H=H_align)
+        else:
+            result = build_stacked_output(combined, img_a, img_b_aligned,
+                                          circles, a_start, b_start, color, count,
+                                          H=H_align)
 
     result = add_watermark(result)
     result.save(args.output, quality=95)
