@@ -212,7 +212,9 @@ async def get_gemini_answer_from_screenshot(image_bytes):
         return "IGNORE"
 
 async def take_screenshot(page, step_name: str):
-    ss_path = os.path.abspath(f"fb_bot_debug_{step_name}.png")
+    log_dir = SCRIPT_DIR / "logs"
+    log_dir.mkdir(exist_ok=True)
+    ss_path = log_dir / f"fb_bot_debug_{step_name}.png"
     try:
         await page.screenshot(path=ss_path)
         print(f"SCREENSHOT_SAVED:{ss_path}")

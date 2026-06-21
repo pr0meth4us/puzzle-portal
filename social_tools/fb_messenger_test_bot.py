@@ -212,7 +212,9 @@ async def get_gemini_answer_from_screenshot(image_bytes):
         return "IGNORE"
 
 async def take_screenshot(page, step_name: str):
-    ss_path = os.path.abspath(f"fb_bot_debug_{step_name}.png")
+    log_dir = SCRIPT_DIR / "logs"
+    log_dir.mkdir(exist_ok=True)
+    ss_path = log_dir / f"fb_bot_debug_{step_name}.png"
     try:
         await page.screenshot(path=ss_path)
         print(f"SCREENSHOT_SAVED:{ss_path}")
@@ -347,17 +349,18 @@ async def run_bot(headed=True):
             try:
                 # Try to get the main chat container
                 main_area = page.locator('div[role="main"]')
+                dump_path = SCRIPT_DIR.parent / "chat_tools" / "e2ee_chat_dump.html"
                 if await main_area.is_visible():
                     html_content = await main_area.inner_html()
-                    with open("e2ee_chat_dump.html", "w", encoding="utf-8") as f:
+                    with open(dump_path, "w", encoding="utf-8") as f:
                         f.write(html_content)
-                    print("DEBUG: Successfully dumped DOM to e2ee_chat_dump.html")
+                    print(f"DEBUG: Successfully dumped DOM to {dump_path}")
                 else:
                     # Fallback to entire body
                     html_content = await page.inner_html('body')
-                    with open("e2ee_chat_dump.html", "w", encoding="utf-8") as f:
+                    with open(dump_path, "w", encoding="utf-8") as f:
                         f.write(html_content)
-                    print("DEBUG: Dumped entire body DOM to e2ee_chat_dump.html")
+                    print(f"DEBUG: Dumped entire body DOM to {dump_path}")
             except Exception as e:
                 print(f"Error dumping DOM: {e}")
 

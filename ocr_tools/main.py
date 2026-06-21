@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/nicksng/code/random/venv/bin/python
 import os
 import sys
 import time
@@ -6,6 +6,7 @@ import json
 import asyncio
 import subprocess
 import platform
+import re
 from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
@@ -21,10 +22,16 @@ from google.cloud import vision
 from google import genai
 from google.genai import types
 
-GOOGLE_APPLICATION_CREDENTIALS = get_config(
+_g_creds_raw = get_config(
     'GOOGLE_APPLICATION_CREDENTIALS',
     str(PROJECT_DIR / 'credentials.json')
 )
+_g_creds_path = Path(_g_creds_raw)
+if not _g_creds_path.is_absolute():
+    _g_creds_path = (PROJECT_DIR / _g_creds_path).resolve()
+GOOGLE_APPLICATION_CREDENTIALS = str(_g_creds_path)
+os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = GOOGLE_APPLICATION_CREDENTIALS
+
 GEMINI_API_KEY = get_config('GEMINI_API_KEY')
 
 IMAGE_FOLDER = SCRIPT_DIR / 'khmer_test_images'
@@ -57,17 +64,64 @@ def copy_to_clipboard(text):
     except Exception as e:
         print(f"  [clipboard failed: {e}]")
 
-def setup():
-    os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = GOOGLE_APPLICATION_CREDENTIALS
-    vision_client = vision.ImageAnnotatorClient()
+def sync_to_icloud(text):
+    paths = [
+        Path.home() / "Library/Mobile Documents/com~apple~CloudDocs/clip.txt",
+        Path.home() / "Library/Mobile Documents/iCloud~is~workflow~my~workflows/Documents/clip.txt"
+    ]
+    for p in paths:
+        try:
+            if p.parent.exists():
+                p.write_text(text, encoding="utf-8")
+                print(f"Synced to iCloud: {p.name} ({p.parent.name})")
+        except Exception as e:
+            print(f"  [iCloud sync failed for {p.parent.name}: {e}]")
+
+def sync_to_local_server(text):
+    try:
+        local_file = Path("/tmp/local_clip.txt")
+        local_file.write_text(text, encoding="utf-8")
+        
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.2)
+        result = s.connect_ex(('127.0.0.1', 8089))
+        s.close()
+        
+        if result != 0:
+            server_script = SCRIPT_DIR / "clip_server.py"
+            subprocess.Popen([sys.executable, str(server_script)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print("Local clip server started on port 8089.")
+        else:
+            print("Local clip server updated.")
+    except Exception as e:
+        print(f"  [Local server update failed: {e}]")
+
+def clean_extracted_text(text: str) -> str:
+    # Remove "រង្វាន់" and everything after it
+    parts = re.split(r'រ\s*ង\s*្\s*វ\s*ា\s*ន\s*់?', text, flags=re.IGNORECASE)
+    if len(parts) > 1:
+        text = parts[0]
+    text = text.strip()
+    # Strip any trailing separator lines
+    lines = text.splitlines()
+    while lines and re.match(r'^[-\s._*=]+$', lines[-1]):
+        lines.pop()
+    return "\n".join(lines).strip()
+
+def setup_genai():
     # Initialize the Vertex AI GenAI Client - project loaded from Bifrost via .env
     vertex_project = os.getenv("VERTEX_AI_PROJECT", "khmer-ocr-496606")
     vertex_location = os.getenv("VERTEX_AI_LOCATION", "asia-southeast1")
-    return vision_client, genai.Client(
+    return genai.Client(
         vertexai=True, 
         project=vertex_project, 
         location=vertex_location
     )
+
+def setup_vision():
+    os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = GOOGLE_APPLICATION_CREDENTIALS
+    return vision.ImageAnnotatorClient()
 
 def get_newest_image():
     images = (
@@ -91,6 +145,9 @@ async def process(image_path, vision_client, genai_client):
     extracted_text = response.full_text_annotation.text
     ocr_time = time.time() - pipeline_start
 
+    # Clean the text to remove prize lists and similar metadata
+    cleaned_text = clean_extracted_text(extracted_text)
+
     print(f"LLM: Sending text to Gemini 2.5 Flash asynchronously...")
     answer_start = time.time()
     
@@ -98,7 +155,7 @@ async def process(image_path, vision_client, genai_client):
     config = types.GenerateContentConfig(response_mime_type="application/json")
     answer_response = await genai_client.aio.models.generate_content(
         model="gemini-2.5-flash",
-        contents=f"{PROMPT}\n\n{extracted_text}",
+        contents=f"{PROMPT}\n\n{cleaned_text}",
         config=config
     )
     
@@ -118,7 +175,7 @@ async def process(image_path, vision_client, genai_client):
 
     return {
         'image': image_path.name,
-        'extracted_text': extracted_text,
+        'extracted_text': cleaned_text,
         'parsed_answer': parsed_answer,
         'timing': {
             'ocr_seconds': round(ocr_time, 3),
@@ -129,28 +186,87 @@ async def process(image_path, vision_client, genai_client):
         'timestamp': datetime.now().isoformat()
     }
 
+async def process_text(input_text, genai_client):
+    pipeline_start = time.time()
+
+    cleaned_text = clean_extracted_text(input_text)
+
+    print(f"LLM: Sending text directly to Gemini 2.5 Flash asynchronously...")
+    answer_start = time.time()
+    
+    # Using client.aio for high-performance non-blocking async calling
+    config = types.GenerateContentConfig(response_mime_type="application/json")
+    answer_response = await genai_client.aio.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=f"{PROMPT}\n\n{cleaned_text}",
+        config=config
+    )
+    
+    try:
+        parsed_answer = json.loads(answer_response.text.strip())
+    except Exception as e:
+        print(f"Warning: Failed to parse JSON response: {e}")
+        parsed_answer = {
+            "final_answer": answer_response.text.strip(),
+            "explanation": "Could not parse explanation.",
+            "explicitly_asks_to_explain": False,
+            "asks_to_draw_or_visualize": False
+        }
+
+    answer_time = time.time() - answer_start
+    total_time = time.time() - pipeline_start
+
+    return {
+        'image': 'TEXT_INPUT',
+        'extracted_text': cleaned_text,
+        'parsed_answer': parsed_answer,
+        'timing': {
+            'ocr_seconds': 0.0,
+            'llm_seconds': round(answer_time, 3),
+            'total_seconds': round(total_time, 3)
+        },
+        'status': 'SUCCESS',
+        'timestamp': datetime.now().isoformat()
+    }
+
 async def main_async():
-    if not Path(GOOGLE_APPLICATION_CREDENTIALS).exists():
-        print(f"ERROR: {GOOGLE_APPLICATION_CREDENTIALS} not found")
-        sys.exit(1)
+    # If the user passes text directly via command-line arguments
+    text_input = None
+    if len(sys.argv) > 1:
+        text_input = " ".join(sys.argv[1:]).lstrip('-')
+        # Clean any surrounding quotes that the shell might pass
+        if (text_input.startswith('"') and text_input.endswith('"')) or \
+           (text_input.startswith("'") and text_input.endswith("'")):
+            text_input = text_input[1:-1]
+        text_input = text_input.strip()
+
     if not GEMINI_API_KEY:
         print("ERROR: GEMINI_API_KEY not in .env")
         sys.exit(1)
-    if not IMAGE_FOLDER.exists():
-        print(f"ERROR: {IMAGE_FOLDER} folder not found")
-        sys.exit(1)
 
-    image_path = get_newest_image()
-    if not image_path:
-        print(f"ERROR: No images found in {IMAGE_FOLDER}")
-        sys.exit(1)
+    if not text_input:
+        if not Path(GOOGLE_APPLICATION_CREDENTIALS).exists():
+            print(f"ERROR: {GOOGLE_APPLICATION_CREDENTIALS} not found")
+            sys.exit(1)
+        if not IMAGE_FOLDER.exists():
+            print(f"ERROR: {IMAGE_FOLDER} folder not found")
+            sys.exit(1)
 
-    print(f"Processing newest image: {image_path.name}")
+        image_path = get_newest_image()
+        if not image_path:
+            print(f"ERROR: No images found in {IMAGE_FOLDER}")
+            sys.exit(1)
 
-    vision_client, genai_client = setup()
+        print(f"Processing newest image: {image_path.name}")
+
+    genai_client = setup_genai()
 
     try:
-        result = await process(image_path, vision_client, genai_client)
+        if text_input:
+            result = await process_text(text_input, genai_client)
+        else:
+            vision_client = setup_vision()
+            result = await process(image_path, vision_client, genai_client)
 
         # --- NEW CODE: Print the extracted question ---
         print("\n--- Extracted Text (Question) ---")
@@ -175,10 +291,25 @@ async def main_async():
         if parsed.get('explicitly_asks_to_explain'):
             clipboard_text = f"{parsed.get('final_answer')}\n\nExplanation:\n{parsed.get('explanation')}"
 
-        print(f"\nTime: {result['timing']['total_seconds']}s (OCR: {result['timing']['ocr_seconds']}s | LLM: {result['timing']['llm_seconds']}s)")
+        if result['timing']['ocr_seconds'] > 0:
+            print(f"\nTime: {result['timing']['total_seconds']}s (OCR: {result['timing']['ocr_seconds']}s | LLM: {result['timing']['llm_seconds']}s)")
+        else:
+            print(f"\nTime: {result['timing']['total_seconds']}s (LLM: {result['timing']['llm_seconds']}s)")
 
         copy_to_clipboard(clipboard_text)
-        print("Copied to clipboard.")
+        
+        # Audible alert
+        if platform.system() == 'Darwin':
+            try:
+                subprocess.Popen(['afplay', '/System/Library/Sounds/Glass.aiff'])
+            except Exception:
+                pass
+                
+        # Big visual alert
+        print("\n\033[42;97;1m ✨✨ SUCCESS: COPIED & SYNCED! ✨✨ \033[0m\n")
+
+        sync_to_icloud(clipboard_text)
+        sync_to_local_server(clipboard_text)
 
         output_file = OUTPUT_FOLDER / f"production_run_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         with open(output_file, 'w', encoding='utf-8') as f:

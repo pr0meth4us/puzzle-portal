@@ -41,8 +41,13 @@ def refactor_file(filepath):
             f.write(new_content)
         print(f"Refactored: {filepath}")
 
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = SCRIPT_DIR.parent
+
 if __name__ == '__main__':
-    for root, dirs, files in os.walk('.'):
+    for root, dirs, files in os.walk(PROJECT_DIR):
         if 'venv' in dirs:
             dirs.remove('venv')
         if '__pycache__' in dirs:

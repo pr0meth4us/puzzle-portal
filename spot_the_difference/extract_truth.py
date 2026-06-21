@@ -1,17 +1,23 @@
 import os
+import sys
 import asyncio
 from pathlib import Path
 from google import genai
 from google.genai import types
-
 from dotenv import load_dotenv
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = SCRIPT_DIR.parent
+sys.path.append(str(PROJECT_DIR))
+
 from utils.bifrost_config import get_config
-load_dotenv('/Users/nicksng/code/random/.env')
+
+load_dotenv(PROJECT_DIR / '.env')
 GEMINI_API_KEY = get_config('GEMINI_API_KEY')
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 async def main():
-    val_dir = Path('/Users/nicksng/code/random/spot_the_difference/validation_dataset')
+    val_dir = SCRIPT_DIR / 'validation_dataset'
     answers = sorted(val_dir.glob('answer_*.jpg'))
     for ans in answers:
         with open(ans, 'rb') as f: data = f.read()

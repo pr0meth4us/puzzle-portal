@@ -1,6 +1,12 @@
 import os
 import sys
+from pathlib import Path
 from dotenv import load_dotenv
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = SCRIPT_DIR.parent
+sys.path.append(str(PROJECT_DIR))
+
 from ocr_tools.lens import get_google_lens_context, upload_to_temp_host
 from serpapi import GoogleSearch
 from utils.bifrost_config import get_config

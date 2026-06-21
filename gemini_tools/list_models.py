@@ -1,3 +1,9 @@
+import sys
+from pathlib import Path
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = SCRIPT_DIR.parent
+sys.path.append(str(PROJECT_DIR))
+
 from google import genai
 import os
 from utils.bifrost_config import get_config

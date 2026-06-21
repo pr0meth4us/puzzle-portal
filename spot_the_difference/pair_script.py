@@ -1,12 +1,18 @@
 import os
+import sys
 import asyncio
 from pathlib import Path
 from google import genai
 from google.genai import types
-
 from dotenv import load_dotenv
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = SCRIPT_DIR.parent
+sys.path.append(str(PROJECT_DIR))
+
 from utils.bifrost_config import get_config
-load_dotenv('/Users/nicksng/code/random/.env')
+
+load_dotenv(PROJECT_DIR / '.env')
 GEMINI_API_KEY = get_config('GEMINI_API_KEY')
 client = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -30,9 +36,9 @@ async def describe_dir(dir_path):
 
 async def main():
     print("Describing Correct Answers...")
-    ans = await describe_dir('/Users/nicksng/code/random/spot_the_difference/correct answers')
+    ans = await describe_dir(SCRIPT_DIR / 'correct_answers')
     print("\nDescribing Puzzles...")
-    puz = await describe_dir('/Users/nicksng/code/random/spot_the_difference/puzzles')
+    puz = await describe_dir(SCRIPT_DIR / 'puzzles')
 
 if __name__ == '__main__':
     asyncio.run(main())

@@ -1,7 +1,13 @@
-from google.cloud import vision
 import sys
 import os
+from pathlib import Path
 from dotenv import load_dotenv
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = SCRIPT_DIR.parent
+sys.path.append(str(PROJECT_DIR))
+
+from google.cloud import vision
 from utils.bifrost_config import get_config
 
 load_dotenv()

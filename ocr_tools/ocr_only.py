@@ -47,9 +47,6 @@ load_dotenv()
 
 # ── Config ────────────────────────────────────────────────────────────────────
 PROJECT_DIR = Path(__file__).resolve().parent.parent
-GOOGLE_APPLICATION_CREDENTIALS = get_config(
-    'GOOGLE_APPLICATION_CREDENTIALS', str(PROJECT_DIR / 'credentials.json')
-)
 OUTPUT_FOLDER = Path(__file__).resolve().parent / 'results'
 OUTPUT_FOLDER.mkdir(exist_ok=True)
 
@@ -62,8 +59,46 @@ RAM_SAFETY_FACTOR = 0.4
 # ──────────────────────────────────────────────────────────────────────────────
 
 
+def _resolve_credentials() -> str:
+    """
+    Resolve Google credentials in priority order:
+    1. GOOGLE_APPLICATION_CREDENTIALS_JSON (full JSON string from Bifrost)
+       → write to a temp file and return that path.
+    2. GOOGLE_APPLICATION_CREDENTIALS (file path from Bifrost or env)
+       → return as-is if the file exists.
+    3. Fall back to <project_root>/credentials.json.
+    """
+    # Priority 1: full JSON content stored in Bifrost
+    creds_json = get_config('GOOGLE_APPLICATION_CREDENTIALS_JSON', '')
+    if creds_json.strip():
+        import tempfile
+        tmp = tempfile.NamedTemporaryFile(
+            mode='w', suffix='.json', delete=False, prefix='gcp_creds_'
+        )
+        tmp.write(creds_json)
+        tmp.flush()
+        tmp.close()
+        return tmp.name
+
+    # Priority 2: path stored in Bifrost / env
+    creds_path = get_config(
+        'GOOGLE_APPLICATION_CREDENTIALS', str(PROJECT_DIR / 'credentials.json')
+    )
+    # Resolve relative paths against the project root
+    resolved = Path(creds_path)
+    if not resolved.is_absolute():
+        resolved = PROJECT_DIR / resolved
+    if resolved.exists():
+        return str(resolved)
+
+    # Priority 3: sibling credentials.json next to the script
+    fallback = PROJECT_DIR / 'credentials.json'
+    return str(fallback)
+
+
 def setup_vision_client():
-    os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = GOOGLE_APPLICATION_CREDENTIALS
+    creds_path = _resolve_credentials()
+    os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = creds_path
     from google.cloud import vision
     return vision.ImageAnnotatorClient()
 
@@ -681,8 +716,9 @@ def main():
     )
     args = parser.parse_args()
 
-    if not Path(GOOGLE_APPLICATION_CREDENTIALS).exists():
-        print(f"ERROR: Credentials not found at {GOOGLE_APPLICATION_CREDENTIALS}")
+    resolved_creds = _resolve_credentials()
+    if not Path(resolved_creds).exists():
+        print(f"ERROR: Credentials not found. Tried: {resolved_creds}")
         sys.exit(1)
 
     languages  = [lang.strip() for lang in args.lang.split(',') if lang.strip()]

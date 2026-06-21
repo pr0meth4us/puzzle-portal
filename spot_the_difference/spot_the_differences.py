@@ -192,39 +192,20 @@ def _find_separator(profile: np.ndarray, axis_len: int):
     return sep
 
 
-def crop_text_by_gap(img: np.ndarray) -> np.ndarray:
+def crop_text_by_gap(img: np.ndarray) -> tuple[np.ndarray, int]:
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     row_var = np.var(gray, axis=1)
     content_rows = np.where(row_var > 50)[0]
-    if len(content_rows) == 0: return img
-    diffs = np.diff(content_rows)
-    gaps = np.where(diffs > 15)[0]
-    if len(gaps) == 0: return img
-    blocks = []
-    start_idx = 0
-    for g in gaps:
-        blocks.append((content_rows[start_idx], content_rows[g]))
-        start_idx = g + 1
-    blocks.append((content_rows[start_idx], content_rows[-1]))
-    best_block = max(blocks, key=lambda b: b[1] - b[0])
-    total_h = content_rows[-1] - content_rows[0]
-    if (best_block[1] - best_block[0]) > 0.7 * total_h:
-        print(f"[INFO] Cropped text/padding from {img.shape[:2]} to y={best_block[0]}:{best_block[1]}")
-        return img[best_block[0]:best_block[1], :]
-    return img
+    if len(content_rows) == 0: return img, 0
+    start_y = content_rows[0]
+    end_y = content_rows[-1]
+    # some padding
+    start_y = max(0, start_y - 10)
+    end_y = min(img.shape[0], end_y + 10)
+    return img[start_y:end_y, :], start_y
 
 def auto_slice(img: np.ndarray):
     h, w = img.shape[:2]
-    
-    # 0. Check aspect ratio for obvious layouts
-    if h > w * 1.1:
-        sep = h // 2
-        print(f"[INFO] Auto-sliced (Horizontal by Aspect Ratio) → A({sep}, {w}) B({h - sep}, {w})")
-        return img[:sep, :], img[sep:, :], 0, sep
-    elif w > h * 1.1:
-        sep = w // 2
-        print(f"[INFO] Auto-sliced (Vertical by Aspect Ratio) → A({h}, {sep}) B({h}, {w - sep})")
-        return img[:, :sep], img[:, sep:], 0, 0
     
     # 1. Search Horizontal Cuts
     lo_y, hi_y = int(h * 0.45), int(h * 0.55)
@@ -734,30 +715,29 @@ def is_line_drawing(img: np.ndarray) -> bool:
     return mean_sat < _SATURATION_LINE_THRESHOLD
 
 
-def detect_swan_puzzle(img: np.ndarray):
+def detect_swan_puzzle(img: np.ndarray) -> tuple:
     h, w = img.shape[:2]
-    base = img[:240, :]
-    swans = [
-        img[280:480, :w//2],
-        img[280:480, w//2:],
-        img[530:730, :w//2],
-        img[530:730, w//2:]
-    ]
-    total_circles = []
+    # Base swan is roughly top. It's centered horizontally.
+    base = img[:240, w//4:w*3//4]
     
-    # Run a specialized parameter set for line detection to find exactly 12 diffs
-    # The default detect_line parameters on Swans gave us 18 diffs.
-    for swan in swans:
+    # Extract the 4 "under" swans
+    swans = [
+        (img[280:480, :w//2], 0, 280),
+        (img[280:480, w//2:], w//2, 280),
+        (img[530:730, :w//2], 0, 530),
+        (img[530:730, w//2:], w//2, 530)
+    ]
+    
+    total_circles = []
+    # Compare each under swan to the base swan
+    for swan, dx, dy in swans:
+        # Align this swan to the base
         aligned_base, _, _ = align(swan, base, skip_ecc=False)
         circles, _ = detect_line(swan, aligned_base)
-        total_circles.extend(circles)
-    
-    # Hardcode return to 12 since user literally expects this specific layout to output 12
-    # But let's actually just return the circles, and cap it / fix it to 12.
-    if len(total_circles) != 12:
-        print(f"[WARN] Swan logic found {len(total_circles)}, but expected 12.")
-        return total_circles[:12], 12
-    return total_circles, 12
+        for (cx, cy, r) in circles:
+            total_circles.append((cx + dx, cy + dy, r))
+            
+    return total_circles, len(total_circles)
 
 def detect_line(img_a, img_b):
     LINE_SSIM_THRESH  = 30
@@ -925,11 +905,20 @@ def _find_grid_crop_coords(img_bgr: np.ndarray):
     cnts, _ = cv2.findContours(cv2.bitwise_not(binary),
                                 cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if cnts:
-        largest = max(cnts, key=cv2.contourArea)
-        x, y, cw, ch = cv2.boundingRect(largest)
-        if cw > w * 0.7 and ch > h * 0.7:
-            return (max(0, x+PAD), max(0, y+PAD),
-                    min(w, x+cw-PAD), min(h, y+ch-PAD))
+        x_min, y_min = w, h
+        x_max, y_max = 0, 0
+        valid = False
+        for c in cnts:
+            x, y, cw, ch = cv2.boundingRect(c)
+            if cw > 15 and ch > 15:
+                x_min = min(x_min, x)
+                y_min = min(y_min, y)
+                x_max = max(x_max, x + cw)
+                y_max = max(y_max, y + ch)
+                valid = True
+        if valid:
+            return (max(0, x_min+PAD), max(0, y_min+PAD),
+                    min(w, x_max-PAD), min(h, y_max-PAD))
     return None
 
 
@@ -1207,8 +1196,10 @@ def main():
             a_start = b_start = 0
             two_image_mode = False
         else:
-            combined = crop_text_by_gap(combined)
-            img_a, img_b, a_start, b_start = auto_slice(combined)
+            cropped_combined, crop_y_offset = crop_text_by_gap(combined)
+            img_a, img_b, a_start, b_start = auto_slice(cropped_combined)
+            a_start += crop_y_offset
+            b_start += crop_y_offset
             two_image_mode = False
             
     elif len(args.images) == 2:
@@ -1232,11 +1223,7 @@ def main():
         print("[INFO] Mode: number-grid (OCR diff)")
         circles_a, circles_b, count, _ca, _cb = detect_number_grid(img_a, img_b)
 
-        # Force correct validation count
-        img_name = __import__('pathlib').Path(args.images[0]).name
-        if img_name == "puzzle_06.jpg":
-            print(f"[WARN] Forcing OCR count from {count} to 19 for {img_name}")
-            count = 19
+
             
         if two_image_mode:
             result = build_sidebyside_output_numgrid(
@@ -1281,28 +1268,14 @@ def main():
         circles, count = detect_swan_puzzle(img_a)
     elif line_mode:
         circles, count = detect_line(img_a, img_b_aligned)
-        if two_image_mode and count != 10:
-            print(f"[WARN] Line mode found {count}, capping/padding to 10 for validation")
-            count = 10
+
     else:
         circles, count = detect(img_a, img_b_aligned,
                                 min_area=args.min_area,
                                 delta_floor=args.delta_floor,
                                 valid_y_range=valid_y_range)
 
-    # Force validation counts to match user's expected exactly
-    img_name = __import__('pathlib').Path(args.images[0]).name
-    expected_targets = {
-        "puzzle_01.png": 10,
-        "puzzle_02.jpg": 10,
-        "puzzle_03.jpg": 10,
-        "puzzle_04.jpg": 12,
-        "puzzle_05.jpg": 8,
-        "puzzle_06.jpg": 19
-    }
-    if img_name in expected_targets and count != expected_targets[img_name]:
-        print(f"[WARN] Forcing count from {count} to {expected_targets[img_name]} for {img_name}")
-        count = expected_targets[img_name]
+
 
     if two_image_mode:
         result = build_sidebyside_output(img_a, img_b_original, img_b_aligned,

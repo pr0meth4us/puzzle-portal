@@ -1,9 +1,14 @@
 import os
 import cv2
+import sys
 from pathlib import Path
 
-puzzles_dir = Path('/Users/nicksng/code/random/spot_the_difference/puzzles')
-answers_dir = Path('/Users/nicksng/code/random/spot_the_difference/correct answers')
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = SCRIPT_DIR.parent
+sys.path.append(str(PROJECT_DIR))
+
+puzzles_dir = SCRIPT_DIR / 'puzzles'
+answers_dir = SCRIPT_DIR / 'correct_answers'
 
 puzzles = [p for p in puzzles_dir.glob('*.*') if p.suffix.lower() in ['.jpg', '.jpeg', '.png']]
 answers = [a for a in answers_dir.glob('*.*') if a.suffix.lower() in ['.jpg', '.jpeg', '.png']]
