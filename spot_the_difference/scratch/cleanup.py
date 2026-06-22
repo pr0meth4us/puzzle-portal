@@ -2,7 +2,7 @@ import os
 import shutil
 from pathlib import Path
 
-BASE_DIR = Path("/Users/nicksng/code/random/spot_the_difference")
+BASE_DIR = Path("/Users/nicksng/code/puzzle-portal/spot_the_difference")
 SCRATCH_DIR = BASE_DIR / "scratch"
 
 # Files to move to scratch/

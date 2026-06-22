@@ -2,11 +2,11 @@ import cv2
 import sys
 from pathlib import Path
 
-sys.path.append("/Users/nicksng/code/random/spot_the_difference")
+sys.path.append("/Users/nicksng/code/puzzle-portal/spot_the_difference")
 import spot_the_differences as std
 
 for puz in ["puzzle_07.jpg", "puzzle_08.jpg"]:
-    p_path = Path("/Users/nicksng/code/random/spot_the_difference/puzzles") / puz
+    p_path = Path("/Users/nicksng/code/puzzle-portal/spot_the_difference/puzzles") / puz
     print(f"\n================ {puz} ================")
     combined = std.load_bgr(p_path)
     cropped_combined, crop_y_offset = std.crop_text_by_gap(combined)

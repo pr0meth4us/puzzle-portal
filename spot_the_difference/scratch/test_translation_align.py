@@ -1,55 +1,39 @@
 import cv2
 import numpy as np
-from pathlib import Path
 import sys
+from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).resolve().parent.parent
-sys.path.append(str(SCRIPT_DIR))
+sys.path.append("/Users/nicksng/code/puzzle-portal/spot_the_difference")
 import spot_the_differences as std
 
-def run_translation_test(puz_name):
-    print(f"\n=========================================")
-    print(f"Testing translation-only alignment on {puz_name}")
-    print(f"=========================================")
-    p_path = SCRIPT_DIR / "puzzles" / puz_name
-    combined = cv2.imread(str(p_path))
-    
-    cropped_combined, crop_y_offset = std.crop_text_by_gap(combined)
-    img_a, img_b, a_start, b_start = std.auto_slice(cropped_combined)
-    
-    # Run SIFT matching
-    g_ref = std._gray(img_a)
-    g_tgt = std._gray(img_b)
-    kp1, kp2, good = std._match(g_ref, g_tgt, "SIFT")
-    
-    src = np.float32([kp2[m.queryIdx].pt for m in good]).reshape(-1,1,2)
-    dst = np.float32([kp1[m.trainIdx].pt for m in good]).reshape(-1,1,2)
-    
-    # Calculate median translation
-    dx = float(np.median(dst[:, 0, 0] - src[:, 0, 0]))
-    dy = float(np.median(dst[:, 0, 1] - src[:, 0, 1]))
-    print(f"SIFT matches: {len(good)} | Median translation: dx={dx:.3f}, dy={dy:.3f}")
-    
-    # Build translation-only Homography matrix
-    H_trans = np.array([[1.0, 0.0, dx],
-                        [0.0, 1.0, dy],
-                        [0.0, 0.0, 1.0]], dtype=np.float32)
-    
-    h, w = img_a.shape[:2]
-    img_b_aligned = std._warp_h(img_b, H_trans, (w, h))
-    
-    s_before = std._ssim(img_a, img_b)
-    s_after = std._ssim(img_a, img_b_aligned)
-    print(f"SSIM before: {s_before:.4f} | SSIM after translation align: {s_after:.4f}")
-    
-    # Run detect
-    is_vertical_split = (img_a.shape[0] == cropped_combined.shape[0])
-    split_dir = "vertical" if is_vertical_split else "horizontal"
-    
-    circles, count = std.detect(img_a, img_b_aligned, min_area=30, split_dir=split_dir, H=H_trans)
-    print(f"Differences found: {count}")
-    for i, c in enumerate(circles):
-        print(f"  Circle {i+1}: {c}")
+combined = std.load_bgr("/Users/nicksng/code/puzzle-portal/spot_the_difference/puzzles/puzzle_07.jpg")
+cropped_combined, crop_y_offset = std.crop_text_by_gap(combined)
+img_a, img_b, a_start, b_start = std.auto_slice(cropped_combined)
 
-run_translation_test("puzzle_07.jpg")
-run_translation_test("puzzle_08.jpg")
+h, w = img_a.shape[:2]
+
+# Let's estimate translation using ECC with MOTION_TRANSLATION
+gray_a = std._gray(img_a)
+gray_b = std._gray(img_b)
+
+# Run ECC translation
+warp_matrix = np.eye(2, 3, dtype=np.float32)
+criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 150, 1e-5)
+try:
+    _, warp_matrix = cv2.findTransformECC(gray_a, gray_b, warp_matrix, cv2.MOTION_TRANSLATION, criteria)
+    print(f"Translation matrix:\n{warp_matrix}")
+    img_b_aligned = cv2.warpAffine(img_b, warp_matrix, (w, h), flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REFLECT_101)
+    s_ecc = std._ssim(img_a, img_b_aligned)
+    print(f"SSIM after translation ECC: {s_ecc:.4f}")
+    
+    # Check left edge in img_b_aligned
+    gray_b_aligned = cv2.cvtColor(img_b_aligned, cv2.COLOR_BGR2GRAY)
+    print("\nColumn | Mean gray_a | Mean gray_b_aligned")
+    print("-" * 45)
+    for x in range(20, 50, 2):
+        mean_a = np.mean(gray_a[:, x])
+        mean_b = np.mean(gray_b_aligned[:, x])
+        print(f"x={x:2d}  | {mean_a:10.2f} | {mean_b:10.2f}")
+        
+except Exception as e:
+    print(f"ECC translation failed: {e}")

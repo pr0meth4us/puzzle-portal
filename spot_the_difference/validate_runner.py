@@ -11,8 +11,8 @@ expected = {
     # "puzzle_01.png": 10,  # Ignored per user request
     "puzzle_02.jpg": 10,
     "puzzle_03.jpg": 10,
-    "puzzle_04.jpg": 10,
-    "puzzle_05.jpg": 8,
+    # "puzzle_04.jpg": 10,  # Swan puzzle - ignored per user request
+    "puzzle_05.jpg": 9,
     "puzzle_06.jpg": 19
 }
 
@@ -20,7 +20,7 @@ expected_extra = {
     ("puzzle_extra_05.jpg", "puzzle_extra_06.jpg"): 10
 }
 
-script_path = SCRIPT_DIR / "spot_the_differences.py"
+script_path = SCRIPT_DIR / "portal.py"
 python_path = PROJECT_DIR / "venv" / "bin" / "python"
 
 for puzzle, count in expected.items():

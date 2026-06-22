@@ -12,3 +12,4 @@ __pycache__/
 spot_the_difference/*_fixed.jpg
 social_tools/tiktok_session/
 social_tools/state.json
+*bifrost_cache.json

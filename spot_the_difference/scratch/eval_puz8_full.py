@@ -2,11 +2,11 @@ import sys
 import numpy as np
 import cv2
 
-sys.path.append("/Users/nicksng/code/random/spot_the_difference")
+sys.path.append("/Users/nicksng/code/puzzle-portal/spot_the_difference")
 import spot_the_differences as std
 import scratch.eval_puz7_8 as ev
 
-c_8, ec_8, col_8, max_r_8 = ev.precompute_candidates("/Users/nicksng/code/random/spot_the_difference/puzzles/puzzle_08.jpg", "Puzzle 8")
+c_8, ec_8, col_8, max_r_8 = ev.precompute_candidates("/Users/nicksng/code/puzzle-portal/spot_the_difference/puzzles/puzzle_08.jpg", "Puzzle 8")
 
 delta_floors = [7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 18.0, 20.0, 22.0, 25.0, 30.0]
 min_areas = [20, 30, 40, 50, 75, 100, 125, 150, 200, 250, 300]

@@ -3,7 +3,7 @@ import sys
 import numpy as np
 from pathlib import Path
 
-sys.path.append("/Users/nicksng/code/random/spot_the_difference")
+sys.path.append("/Users/nicksng/code/puzzle-portal/spot_the_difference")
 import spot_the_differences as std
 
 puzzles = [
@@ -17,7 +17,7 @@ puzzles = [
 ]
 
 for puz, folder in puzzles:
-    p_path = Path("/Users/nicksng/code/random/spot_the_difference") / folder / puz
+    p_path = Path("/Users/nicksng/code/puzzle-portal/spot_the_difference") / folder / puz
     combined = std.load_bgr(p_path)
     h, w = combined.shape[:2]
     if puz == "puzzle_06.jpg":

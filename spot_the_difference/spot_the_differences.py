@@ -98,6 +98,7 @@ _LATIN_FONT = next((p for p in [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "C:/Windows/Fonts/arialbd.ttf",
     "/Library/Fonts/Arial Bold.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
 ] if os.path.exists(p)), None)
 
 
@@ -390,39 +391,71 @@ def _stage3_ecc(ref, tgt):
                                           inputMask=None, gaussFiltSize=5)
     except cv2.error as e:
         print(f"[WARN] Stage-3 ECC: {e}")
-        return tgt
+        return tgt, None
     H_full       = H_small.copy()
     H_full[0, 2] /= sc
     H_full[1, 2] /= sc
     if not _homography_ok(H_full, w, h):
         print("[WARN] Stage-3 ECC: insane result — skipped")
-        return tgt
-    return _warp_h(tgt, H_full, (w, h))
+        return tgt, None
+    return _warp_h(tgt, H_full, (w, h)), H_full
 
 
 def align(ref, tgt, skip_ecc=True):
+    h, w = ref.shape[:2]
+    ht, wt = tgt.shape[:2]
+    
     s0 = _ssim(ref, tgt)
     print(f"[INFO] SSIM before alignment : {s0:.4f}")
+    
     tgt = _stage1_scale(ref, tgt)
     s1  = _ssim(ref, tgt)
     print(f"[INFO] SSIM after  Stage-1   : {s1:.4f}")
+    
+    # Initialize valid mask from Stage-1
+    ar_r = w / h
+    ar_t = wt / ht
+    diff = abs(ar_r - ar_t) / max(ar_r, ar_t)
+    
+    valid_mask = np.zeros((h, w), dtype=np.uint8)
+    if h == ht and w == wt:
+        valid_mask[:, :] = 255
+    elif diff <= SAME_RATIO_TOL:
+        valid_mask[:, :] = 255
+    else:
+        scale = min(w / wt, h / ht)
+        nw, nh = int(wt * scale), int(ht * scale)
+        y0, x0 = (h - nh) // 2, (w - nw) // 2
+        valid_mask[y0:y0+nh, x0:x0+nw] = 255
+
     tgt2, valid_range, H = _stage2_features(ref, tgt)
     s2 = _ssim(ref, tgt2)
     if s2 >= s1 - 0.005:
         tgt, s_cur = tgt2, s2
+        if H is not None:
+            valid_mask = cv2.warpPerspective(valid_mask, H, (w, h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
     else:
         s_cur = s1; H = None; valid_range = (0, ref.shape[0])
         print("[INFO] Stage-2 made things worse — reverted")
     print(f"[INFO] SSIM after  Stage-2   : {s_cur:.4f}")
+    
     if not skip_ecc:
-        tgt3 = _stage3_ecc(ref, tgt)
+        tgt3, H_ecc = _stage3_ecc(ref, tgt)
         s3   = _ssim(ref, tgt3)
         if s3 > s_cur + 0.001:
             tgt, s_cur = tgt3, s3
+            if H is not None and H_ecc is not None:
+                H = H_ecc @ H
+            elif H_ecc is not None:
+                H = H_ecc
+            if H_ecc is not None:
+                valid_mask = cv2.warpPerspective(valid_mask, H_ecc, (w, h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
             print(f"[INFO] SSIM after  Stage-3   : {s_cur:.4f}  (ECC applied)")
         else:
             print(f"[INFO] SSIM after  Stage-3   : {s3:.4f}  (ECC skipped)")
-    return tgt, valid_range, H
+            
+    return tgt, valid_range, H, valid_mask
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -549,10 +582,9 @@ def _split_large_blob(blob_mask: np.ndarray, cdiff: np.ndarray,
 
 def is_watermark_text(text: str) -> bool:
     t_lower = text.lower()
-    # English watermark/url/label keywords
     eng_keywords = [
         "enterprises", "digital", "gov", "kh", "copyright", "john", "©", 
-        "c0pyright", "ste", "llge", "sers", "bae", "col", "jus"
+        "c0pyright", "ste", "bae"
     ]
     # Khmer watermark/label keywords
     khm_keywords = ["រូប", "រប", "ទី", "ខុស", "គ្នា", "ស្វែង", "រក", "ចំណុច", "រូបភាព", "របភាព"]
@@ -599,7 +631,7 @@ def _mask_ocr_text(img_a: np.ndarray, img_b: np.ndarray, bmask: np.ndarray):
                         continue
                         
                     # Mask the detected bounding box with moderate padding
-                    pad = 12
+                    pad = 30
                     x1 = max(0, x - pad)
                     y1 = max(0, y - pad)
                     x2 = min(bmask.shape[1], x + w + pad)
@@ -646,7 +678,7 @@ def _mask_ocr_text(img_a: np.ndarray, img_b: np.ndarray, bmask: np.ndarray):
                         w_full = rh
                         h_full = rw
                         
-                        pad = 12
+                        pad = 30
                         x1 = max(0, x_full - pad)
                         y1 = max(0, y_full - pad)
                         x2 = min(w_panel, x_full + w_full + pad)
@@ -728,7 +760,14 @@ def detect(img_a: np.ndarray,
            valid_y_range=None,
            split_dir=None,
            H=None,
-           edge_mask_ksize: int = 0):
+           edge_mask_ksize: int = 0,
+           custom_left_margin: int = 0,
+           custom_right_margin: int = 0,
+           custom_top_margin: int = 0,
+           custom_bottom_margin: int = 0,
+           mask_rois: list = [],
+           merge_radius_override: int = -1,
+           valid_mask: np.ndarray = None):
     h, w = img_a.shape[:2]
 
     assert img_b.shape[:2] == (h, w), (
@@ -781,13 +820,16 @@ def detect(img_a: np.ndarray,
     elif split_dir == "horizontal":
         by_top, by_bot = 16, 8
         bmask[by_top:h - by_bot, 8:w - 8] = 255
-        if h == 555 and w == 565:
-            bmask[480:, 500:] = 0
     else:
         by_top, by_bot = border_val, border_val
         bmask[by_top:h - by_bot, border_val:w - border_val] = 255
     
-    if H is not None:
+    if valid_mask is not None:
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (11, 11))
+        eroded_valid = cv2.erode(valid_mask, kernel)
+        bmask = cv2.bitwise_and(bmask, eroded_valid)
+        print("[INFO] Applied dynamic alignment overlap mask.")
+    elif H is not None:
         mask_b = np.ones(img_b.shape[:2], dtype=np.uint8) * 255
         warped_mask_b = cv2.warpPerspective(mask_b, H, (w, h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (11, 11))
@@ -801,6 +843,23 @@ def detect(img_a: np.ndarray,
     
     _mask_margins(img_a, bmask)
     _mask_ocr_text(img_a, img_b, bmask)
+
+    if custom_left_margin > 0:
+        bmask[:, :custom_left_margin] = 0
+        print(f"[INFO] Applied custom left margin: x < {custom_left_margin}")
+    if custom_right_margin > 0:
+        bmask[:, w - custom_right_margin:] = 0
+        print(f"[INFO] Applied custom right margin: x >= {w - custom_right_margin}")
+    if custom_top_margin > 0:
+        bmask[:custom_top_margin, :] = 0
+        print(f"[INFO] Applied custom top margin: y < {custom_top_margin}")
+    if custom_bottom_margin > 0:
+        bmask[h - custom_bottom_margin:, :] = 0
+        print(f"[INFO] Applied custom bottom margin: y >= {h - custom_bottom_margin}")
+        
+    for rx1, ry1, rx2, ry2 in mask_rois:
+        bmask[ry1:ry2, rx1:rx2] = 0
+        print(f"[INFO] Masked custom ROI: ({rx1}, {ry1}) -> ({rx2}, {ry2})")
 
     if edge_mask_ksize > 0:
         gray_a = cv2.cvtColor(img_a, cv2.COLOR_BGR2GRAY)
@@ -876,9 +935,7 @@ def detect(img_a: np.ndarray,
                  for cnt, delta, cx, cy, r in candidates
                  if delta >= threshold]
 
-    merge_r = MERGE_RADIUS
-    if split_dir == "horizontal" and h == 555 and w == 565:
-        merge_r = 35
+    merge_r = merge_radius_override if merge_radius_override > 0 else MERGE_RADIUS
 
     groups: list = []
     for cnt, delta, cx, cy, r in surviving:
@@ -943,34 +1000,21 @@ def is_line_drawing(img: np.ndarray) -> bool:
     return mean_sat < _SATURATION_LINE_THRESHOLD
 
 
-def detect_swan_puzzle(img: np.ndarray) -> tuple:
-    h, w = img.shape[:2]
-    # Base swan is roughly top. It's centered horizontally.
-    base = img[:240, w//4:w*3//4]
-    
-    # Extract the 4 "under" swans
-    swans = [
-        (img[280:480, :w//2], 0, 280),
-        (img[280:480, w//2:], w//2, 280),
-        (img[530:730, :w//2], 0, 530),
-        (img[530:730, w//2:], w//2, 530)
-    ]
-    
-    total_circles = []
-    # Compare each under swan to the base swan
-    for swan, dx, dy in swans:
-        # Align this swan to the base
-        aligned_base, _, _ = align(swan, base, skip_ecc=False)
-        circles, _ = detect_line(swan, aligned_base)
-        for (cx, cy, r) in circles:
-            total_circles.append((cx + dx, cy + dy, r))
-            
-    return total_circles, len(total_circles)
 
-def detect_line(img_a, img_b):
+
+def detect_line(img_a, img_b,
+                valid_y_range=None,
+                H=None,
+                custom_left_margin=0,
+                custom_right_margin=0,
+                custom_top_margin=0,
+                custom_bottom_margin=0,
+                mask_rois=[],
+                valid_mask=None,
+                min_area=20):
     LINE_SSIM_THRESH  = 30
     LINE_MORPH_KSIZE  = 3
-    LINE_MIN_AREA     = 20
+    LINE_MIN_AREA     = min_area
     LINE_DELTA_FLOOR  = 5.0
     LINE_MAX_DIFF_MIN = max(80, int(min(img_a.shape[:2]) * 0.45))
     LINE_NMS_RADIUS   = max(20, int(min(img_a.shape[:2]) * 0.12))
@@ -984,11 +1028,49 @@ def detect_line(img_a, img_b):
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (LINE_MORPH_KSIZE, LINE_MORPH_KSIZE))
     thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, k)
     thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN,  k)
+    
     border = max(8, int(min(h, w) * 0.02))
     bmask  = np.zeros_like(thresh)
     bmask[border:h - border, border:w - border] = 255
-    _mask_margins(img_a, bmask)
+    
+    # 1. Skip _mask_margins as line drawings shouldn't use it, but apply valid_mask and custom margins
+    if valid_mask is not None:
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        eroded_valid = cv2.erode(valid_mask, kernel)
+        bmask = cv2.bitwise_and(bmask, eroded_valid)
+    elif H is not None:
+        try:
+            H_inv = np.linalg.inv(H)
+            mask_b = np.ones((h, w), dtype=np.uint8) * 255
+            warped_mask = cv2.warpPerspective(mask_b, H_inv, (w, h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+            warped_mask = cv2.erode(warped_mask, kernel)
+            bmask = cv2.bitwise_and(bmask, warped_mask)
+        except Exception as e:
+            print(f"[WARN] Warp mask creation failed in line detect: {e}")
+            
+    # Apply custom margins
+    if custom_left_margin > 0:
+        bmask[:, :custom_left_margin] = 0
+        print(f"[INFO] Applied custom left margin in line detect: x < {custom_left_margin}")
+    if custom_right_margin > 0:
+        bmask[:, w - custom_right_margin:] = 0
+        print(f"[INFO] Applied custom right margin in line detect: x >= {w - custom_right_margin}")
+    if custom_top_margin > 0:
+        bmask[:custom_top_margin, :] = 0
+        print(f"[INFO] Applied custom top margin in line detect: y < {custom_top_margin}")
+    if custom_bottom_margin > 0:
+        bmask[h - custom_bottom_margin:, :] = 0
+        print(f"[INFO] Applied custom bottom margin in line detect: y >= {h - custom_bottom_margin}")
+        
+    # Apply OCR text masking
     _mask_ocr_text(img_a, img_b, bmask)
+    
+    # Apply custom ROIs
+    for rx1, ry1, rx2, ry2 in mask_rois:
+        bmask[ry1:ry2, rx1:rx2] = 0
+        print(f"[INFO] Masked custom ROI in line detect: ({rx1}, {ry1}) -> ({rx2}, {ry2})")
+        
     thresh = cv2.bitwise_and(thresh, bmask)
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cdiff = np.mean(cv2.absdiff(img_a, img_b).astype(np.float32), axis=2)
@@ -1305,6 +1387,137 @@ def draw_circles_on_panel(panel_pil, circles, color, H_inv=None):
     return img
 
 
+def draw_contours_and_numbers_on_panel(panel_pil, circles, img_a, img_b_aligned, H_inv, color, valid_mask=None):
+    """
+    Draws exact contours of differences and places numbers next to them on the panel.
+    If no contour is found, falls back to drawing a circle.
+    """
+    if len(circles) == 0:
+        return panel_pil
+
+    h, w = img_a.shape[:2]
+    diff = cv2.absdiff(img_a, img_b_aligned)
+    gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+    
+    b_slice_cv = cv2.cvtColor(np.array(panel_pil), cv2.COLOR_RGB2BGR)
+    pw, ph = panel_pil.size
+    
+    # 1. Warp border masking to avoid drawing contours on warped border mismatches
+    bmask = np.ones((h, w), dtype=np.uint8) * 255
+    bmask[:12, :] = 0
+    bmask[h-12:, :] = 0
+    bmask[:, :12] = 0
+    bmask[:, w-12:] = 0
+    
+    if valid_mask is not None:
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        eroded_valid = cv2.erode(valid_mask, kernel)
+        bmask = cv2.bitwise_and(bmask, eroded_valid)
+    elif H_inv is not None:
+        try:
+            H = np.linalg.inv(H_inv)
+            mask_b = np.ones((ph, pw), dtype=np.uint8) * 255
+            warped_mask = cv2.warpPerspective(mask_b, H, (w, h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+            warped_mask = cv2.erode(warped_mask, kernel)
+            bmask = cv2.bitwise_and(bmask, warped_mask)
+        except Exception as e:
+            print(f"[WARN] Warp mask creation failed in drawing: {e}")
+            
+    gray_diff = cv2.bitwise_and(gray_diff, bmask)
+    
+    # Warped circles for fallback
+    warped_circles = []
+    if H_inv is not None:
+        pts = np.float32([[cx, cy] for cx, cy, r in circles]).reshape(-1, 1, 2)
+        mapped = cv2.perspectiveTransform(pts, H_inv).reshape(-1, 2)
+        warped_circles = [(int(np.clip(mx, 0, pw-1)), int(np.clip(my, 0, ph-1)), r)
+                          for (mx, my), (_, _, r) in zip(mapped, circles)]
+    else:
+        warped_circles = [(cx, cy, r) for cx, cy, r in circles]
+        
+    drawn_items = []
+    
+    for idx, (cx, cy, r) in enumerate(circles):
+        cx, cy = int(cx), int(cy)
+        
+        # Define ROI around the anchor (cx, cy)
+        r_size = max(40, int(r * 1.5))
+        y1, y2 = max(0, cy - r_size), min(h, cy + r_size)
+        x1, x2 = max(0, cx - r_size), min(w, cx + r_size)
+        
+        roi = gray_diff[y1:y2, x1:x2].copy()
+        
+        # Zero out the border of the ROI to prevent boundary hugging
+        roi[0:2, :] = 0
+        roi[-2:, :] = 0
+        roi[:, 0:2] = 0
+        roi[:, -2:] = 0
+        
+        # Dynamic thresholding based on local contrast
+        max_val = np.max(roi)
+        thresh_val = max(8, int(max_val * 0.25))
+        
+        _, th = cv2.threshold(roi, thresh_val, 255, cv2.THRESH_BINARY)
+        
+        # Light closing to group nearby components slightly
+        k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, k_close)
+        
+        cnts, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        contours_to_draw = []
+        if cnts:
+            for c in cnts:
+                if cv2.contourArea(c) >= 0:
+                    # Shift contour points to full img_a space
+                    contour_shifted = c + np.array([x1, y1])
+                    # Warp to B space
+                    if H_inv is not None:
+                        pts_pts = contour_shifted.astype(np.float32).reshape(-1, 1, 2)
+                        warped_pts = cv2.perspectiveTransform(pts_pts, H_inv).reshape(-1, 2)
+                        contour_draw = warped_pts.astype(np.int32)
+                    else:
+                        contour_draw = contour_shifted.astype(np.int32)
+                    contours_to_draw.append(contour_draw.reshape(-1, 1, 2))
+                    
+        if contours_to_draw:
+            for c_draw in contours_to_draw:
+                cv2.polylines(b_slice_cv, [c_draw], isClosed=True, color=color[::-1], thickness=3)
+            drawn_items.append(("contours", contours_to_draw, warped_circles[idx]))
+        else:
+            # Fallback to circle drawing
+            fallback_cx, fallback_cy, fallback_r = warped_circles[idx]
+            cv2.circle(b_slice_cv, (fallback_cx, fallback_cy), fallback_r, color[::-1], thickness=3)
+            drawn_items.append(("circle", [], warped_circles[idx]))
+            
+    pil_b = Image.fromarray(cv2.cvtColor(b_slice_cv, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(pil_b)
+    
+    # Make numbers bigger (font_size = 54) and clear
+    font_size = 54
+    font = _load_font(_LATIN_FONT, font_size)
+    
+    for idx, (dtype, cnts_draw, (fcx, fcy, fr)) in enumerate(drawn_items):
+        num_str = str(idx + 1)
+        
+        if dtype == "contours" and cnts_draw:
+            # Find overall bounding box
+            all_pts = np.vstack([c.reshape(-1, 2) for c in cnts_draw])
+            x_min = int(np.min(all_pts[:, 0]))
+            y_min = int(np.min(all_pts[:, 1]))
+            tx = max(5, x_min - 45)
+            ty = max(5, y_min - 45)
+        else:
+            tx = max(5, fcx - fr - 30)
+            ty = max(5, fcy - fr - 30)
+            
+        # Draw number with thick black outline for maximum contrast
+        draw.text((tx, ty), num_str, font=font, fill=(255, 255, 255), stroke_width=4, stroke_fill=(0, 0, 0))
+        
+    return pil_b
+
+
 def _khmer_digits(n: int) -> str:
     return str(n).translate(str.maketrans("0123456789", "០១២៣៤៥៦៧៨៩"))
 
@@ -1361,7 +1574,7 @@ def add_watermark(img: Image.Image) -> Image.Image:
 
 def build_stacked_output(combined_bgr, img_a, img_b_aligned,
                           circles, a_start, b_start, color, count,
-                          H=None):
+                          H=None, valid_mask=None):
     BH = 80
     oh, ow = combined_bgr.shape[:2]
     ph     = img_a.shape[0]
@@ -1369,7 +1582,9 @@ def build_stacked_output(combined_bgr, img_a, img_b_aligned,
     H_inv  = np.linalg.inv(H) if H is not None else None
     b_slice = combined_bgr[b_start:b_start + ph, :]
     pil_b   = Image.fromarray(cv2.cvtColor(b_slice, cv2.COLOR_BGR2RGB))
-    pil_b   = draw_circles_on_panel(pil_b, circles, color, H_inv=H_inv)
+    
+    pil_b = draw_contours_and_numbers_on_panel(pil_b, circles, img_a, img_b_aligned, H_inv, color, valid_mask)
+        
     base   = Image.fromarray(cv2.cvtColor(combined_bgr, cv2.COLOR_BGR2RGB))
     canvas = Image.new("RGB", (ow, BH + oh), (30, 30, 50))
     canvas.paste(base,  (0, BH))
@@ -1381,7 +1596,7 @@ def build_stacked_output(combined_bgr, img_a, img_b_aligned,
 
 def build_vertical_split_output(combined_bgr, img_a, img_b_aligned,
                                 circles, a_start, b_start, crop_y_offset, color, count,
-                                H=None):
+                                H=None, valid_mask=None):
     BH = 80
     oh, ow = combined_bgr.shape[:2]
     pw     = img_a.shape[1]
@@ -1392,7 +1607,8 @@ def build_vertical_split_output(combined_bgr, img_a, img_b_aligned,
     pil_b   = Image.fromarray(cv2.cvtColor(b_slice, cv2.COLOR_BGR2RGB))
     
     H_inv   = np.linalg.inv(H) if H is not None else None
-    pil_b   = draw_circles_on_panel(pil_b, circles, color, H_inv=H_inv)
+    
+    pil_b = draw_contours_and_numbers_on_panel(pil_b, circles, img_a, img_b_aligned, H_inv, color, valid_mask)
     
     pil_a   = Image.fromarray(cv2.cvtColor(img_a, cv2.COLOR_BGR2RGB))
     
@@ -1426,13 +1642,15 @@ def build_stacked_output_numgrid(combined_bgr, img_a,
 
 
 def build_sidebyside_output(img_a, img_b_original, img_b_aligned,
-                             circles, color, count, H=None):
+                             circles, color, count, H=None, valid_mask=None):
     BH, GAP = 80, 6
     h, w    = img_a.shape[:2]
     H_inv   = np.linalg.inv(H) if H is not None else None
     pil_a   = Image.fromarray(cv2.cvtColor(img_a,          cv2.COLOR_BGR2RGB))
     pil_b   = Image.fromarray(cv2.cvtColor(img_b_original, cv2.COLOR_BGR2RGB))
-    pil_b   = draw_circles_on_panel(pil_b, circles, color, H_inv=H_inv)
+    
+    pil_b = draw_contours_and_numbers_on_panel(pil_b, circles, img_a, img_b_aligned, H_inv, color, valid_mask)
+        
     total_w = w * 2 + GAP
     canvas  = Image.new("RGB", (total_w, BH + h), (30, 30, 50))
     canvas.paste(pil_a, (0,       BH))
@@ -1488,6 +1706,12 @@ Examples:
     p.add_argument("--ecc",      action="store_true")
     p.add_argument("--edge-mask-ksize", type=int, default=-1,
                    help="Kernel size for Canny edge masking (0 to disable, >0 to force, -1 for adaptive)")
+    p.add_argument("--left-margin-x",     type=int,   default=0)
+    p.add_argument("--right-margin-x",    type=int,   default=0)
+    p.add_argument("--top-margin-y",       type=int,   default=0)
+    p.add_argument("--bottom-margin-y",    type=int,   default=0)
+    p.add_argument("--mask-roi",          type=str,   default="", help="Format: x1,y1,x2,y2;x1,y1,x2,y2;...")
+    p.add_argument("--merge-radius-override", type=int, default=-1)
     return p.parse_args()
 
 
@@ -1506,15 +1730,7 @@ def main():
         combined = load_bgr(args.images[0])
         h, w = combined.shape[:2]
         
-        # Check for Swan Puzzle
-        if h == 940 and w == 480:
-            print("[INFO] Detected Swan puzzle dimensions. Switching to Swan mode.")
-            args.mode = "swan"
-            img_a = combined
-            img_b = combined
-            a_start = b_start = 0
-            two_image_mode = False
-        elif args.mode == "number":
+        if args.mode == "number":
             # For number grids, slice in half directly without crop_text_by_gap
             half = h // 2
             img_a = combined[:half]
@@ -1579,9 +1795,10 @@ def main():
                                    interpolation=cv2.INTER_LANCZOS4)
         valid_y_range = (0, img_a.shape[0])
         H_align       = None
+        valid_mask    = None
         print("[INFO] Alignment skipped (--no-align)")
     else:
-        img_b_aligned, valid_y_range, H_align = align(img_a, img_b, skip_ecc=False)
+        img_b_aligned, valid_y_range, H_align, valid_mask = align(img_a, img_b, skip_ecc=False)
 
     if args.mode == "auto":
         # Check if line drawing (either explicitly one image, or both images)
@@ -1606,49 +1823,61 @@ def main():
     else:
         print(f"[INFO] Edge masking kernel size set by CLI: {edge_k}")
 
-    if args.mode == "swan":
-        circles, count = detect_swan_puzzle(img_a)
-    elif line_mode:
-        circles, count = detect_line(img_a, img_b_aligned)
+    mask_rois = []
+    if args.mask_roi:
+        for block in args.mask_roi.split(";"):
+            if block.strip():
+                parts = [int(p) for p in block.split(",")]
+                if len(parts) == 4:
+                    mask_rois.append(tuple(parts))
+
+    if line_mode:
+        circles, count = detect_line(img_a, img_b_aligned,
+                                     valid_y_range=valid_y_range,
+                                     H=H_align,
+                                     custom_left_margin=args.left_margin_x,
+                                     custom_right_margin=args.right_margin_x,
+                                     custom_top_margin=args.top_margin_y,
+                                     custom_bottom_margin=args.bottom_margin_y,
+                                     mask_rois=mask_rois,
+                                     valid_mask=valid_mask,
+                                     min_area=args.min_area)
 
     else:
         split_dir = None if two_image_mode else ("vertical" if is_vertical_split else "horizontal")
         if split_dir == "vertical" and not line_mode and args.min_area == 50:
             print("[INFO] Vertical split in colour mode: setting default min_area to 30")
             args.min_area = 30
-        
-        h_panel, w_panel = img_a.shape[:2]
-        if h_panel == 1006 and w_panel == 1152 and args.delta_floor == 7.0:
-            print("[INFO] Detected Puzzle 7 dimensions. Setting default delta_floor to 25.0")
-            args.delta_floor = 25.0
-        elif h_panel == 1009 and w_panel == 1152 and args.delta_floor == 7.0:
-            print("[INFO] Detected Puzzle 8 dimensions. Setting default delta_floor to 12.0, MERGE_RADIUS to 40")
-            args.delta_floor = 12.0
-            global MERGE_RADIUS
-            MERGE_RADIUS = 40
-
+                        
         circles, count = detect(img_a, img_b_aligned,
                                 min_area=args.min_area,
                                 delta_floor=args.delta_floor,
                                 valid_y_range=valid_y_range,
                                 split_dir=split_dir,
                                 H=H_align,
-                                edge_mask_ksize=edge_k)
+                                edge_mask_ksize=edge_k,
+                                custom_left_margin=args.left_margin_x,
+                                custom_right_margin=args.right_margin_x,
+                                custom_top_margin=args.top_margin_y,
+                                custom_bottom_margin=args.bottom_margin_y,
+                                mask_rois=mask_rois,
+                                merge_radius_override=args.merge_radius_override,
+                                valid_mask=valid_mask)
 
 
 
     if two_image_mode:
         result = build_sidebyside_output(img_a, img_b_original, img_b_aligned,
-                                         circles, color, count, H=H_align)
+                                         circles, color, count, H=H_align, valid_mask=valid_mask)
     else:
         if split_dir == "vertical":
             result = build_vertical_split_output(combined, img_a, img_b_aligned,
                                                  circles, a_start, b_start, crop_y_offset, color, count,
-                                                 H=H_align)
+                                                 H=H_align, valid_mask=valid_mask)
         else:
             result = build_stacked_output(combined, img_a, img_b_aligned,
                                           circles, a_start, b_start, color, count,
-                                          H=H_align)
+                                          H=H_align, valid_mask=valid_mask)
 
     result = add_watermark(result)
     result.save(args.output, quality=95)

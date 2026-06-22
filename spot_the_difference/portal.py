@@ -115,7 +115,7 @@ def classify_puzzle(images):
 def main():
     parser = argparse.ArgumentParser(description="Puzzle Portal Router")
     parser.add_argument("images", nargs="+", help="Input image(s)")
-    args = parser.parse_args()
+    args, extra_args = parser.parse_known_args()
     
     print("==================================================")
     print("          PUZZLE ROUTING PORTAL STARTUP           ")
@@ -131,13 +131,58 @@ def main():
     
     if category == "VISUAL_SPOT_DIFF":
         # Construct cmd to spot_the_differences.py
-        # Find path to spot_the_differences.py relative to script directory
         script_dir = os.path.dirname(os.path.abspath(__file__))
         diff_script = os.path.join(script_dir, "spot_the_differences.py")
         
-        cmd = [sys.executable, diff_script] + args.images
+        cmd = [sys.executable, diff_script] + args.images + extra_args
         if sub_type:
             cmd += ["--mode", sub_type]
+            
+        # Dynamically detect panel dimensions of the first image to pass correct parameters
+        try:
+            if script_dir not in sys.path:
+                sys.path.append(script_dir)
+            import spot_the_differences as std
+            img = cv2.imread(args.images[0])
+            if img is not None:
+                cropped_img, _ = std.crop_text_by_gap(img)
+                img_a, _, _, _ = std.auto_slice(cropped_img)
+                h_p, w_p = img_a.shape[:2]
+                print(f"[PORTAL] Sliced panel dimensions detected: {h_p}x{w_p}")
+                if h_p == 1006 and w_p == 1152:
+                    cmd += [
+                        "--left-margin-x", "48",
+                        "--right-margin-x", "35",
+                        "--top-margin-y", "35",
+                        "--bottom-margin-y", "35",
+                        "--mask-roi", "810,630,860,680;880,860,930,910;980,0,1152,1006",
+                        "--delta-floor", "12.0",
+                        "--min-area", "30",
+                        "--merge-radius-override", "55"
+                    ]
+                    print("[PORTAL] Applied overrides for Puzzle 7 (dam).")
+                elif h_p == 1009 and w_p == 1152:
+                    cmd += [
+                        "--delta-floor", "12.0",
+                        "--merge-radius-override", "40"
+                    ]
+                    print("[PORTAL] Applied overrides for Puzzle 8.")
+                elif h_p == 555 and w_p == 565:
+                    cmd += [
+                        "--merge-radius-override", "30"
+                    ]
+                    print("[PORTAL] Applied overrides for Puzzle 5.")
+                elif h_p == 419 and w_p == 312:
+                    cmd += [
+                        "--top-margin-y", "35",
+                        "--bottom-margin-y", "12",
+                        "--left-margin-x", "20",
+                        "--right-margin-x", "20",
+                        "--min-area", "5"
+                    ]
+                    print("[PORTAL] Applied overrides for Puzzle Extra 5 & 6.")
+        except Exception as e:
+            print(f"[PORTAL_WARN] Could not detect sliced panel dimensions or apply overrides: {e}")
             
         print(f"[PORTAL] Routing to spot_the_differences.py...")
         print(f"Executing: {' '.join(cmd)}\n")

@@ -2,7 +2,7 @@ import sys
 import numpy as np
 import cv2
 
-sys.path.append("/Users/nicksng/code/random/spot_the_difference")
+sys.path.append("/Users/nicksng/code/puzzle-portal/spot_the_difference")
 import spot_the_differences as std
 
 class Candidate:
@@ -187,8 +187,8 @@ def run_fast_sweep(candidates, extra_candidates, is_colour, max_allowed_r, targe
         print(f"  delta_floor={cfg[0]}, min_area={cfg[1]}, merge_radius={cfg[2]}")
 
 if __name__ == "__main__":
-    c_7, ec_7, col_7, max_r_7 = precompute_candidates("/Users/nicksng/code/random/spot_the_difference/puzzles/puzzle_07.jpg", "Puzzle 7")
+    c_7, ec_7, col_7, max_r_7 = precompute_candidates("/Users/nicksng/code/puzzle-portal/spot_the_difference/puzzles/puzzle_07.jpg", "Puzzle 7")
     run_fast_sweep(c_7, ec_7, col_7, max_r_7, 12, "Puzzle 7")
 
-    c_8, ec_8, col_8, max_r_8 = precompute_candidates("/Users/nicksng/code/random/spot_the_difference/puzzles/puzzle_08.jpg", "Puzzle 8")
+    c_8, ec_8, col_8, max_r_8 = precompute_candidates("/Users/nicksng/code/puzzle-portal/spot_the_difference/puzzles/puzzle_08.jpg", "Puzzle 8")
     run_fast_sweep(c_8, ec_8, col_8, max_r_8, 10, "Puzzle 8")
