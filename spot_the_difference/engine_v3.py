@@ -1210,31 +1210,35 @@ def draw_contours_and_numbers_on_panel(panel_pil, circles, img_a, img_b_aligned,
                 else:
                     to_draw.append(shifted.astype(np.int32).reshape(-1, 1, 2))
 
+        fcx, fcy, fr = warped[idx]
+        # Always draw the bounding circle as a thin guide to make regions clear
+        cv2.circle(b_cv, (fcx, fcy), fr, color[::-1], thickness=2)
+
         if to_draw:
             for c_draw in to_draw:
                 cv2.polylines(b_cv, [c_draw], isClosed=True,
-                              color=color[::-1], thickness=3)
+                              color=color[::-1], thickness=2)
             drawn.append(("contour", to_draw, warped[idx]))
         else:
-            fcx, fcy, fr = warped[idx]
-            cv2.circle(b_cv, (fcx, fcy), fr, color[::-1], thickness=3)
             drawn.append(("circle", [], warped[idx]))
 
     pil_b = Image.fromarray(cv2.cvtColor(b_cv, cv2.COLOR_BGR2RGB))
     draw  = ImageDraw.Draw(pil_b)
-    font  = _load_font(_LATIN_FONT, 54)
+    font_size = max(18, min(48, int(pw * 0.07)))
+    font  = _load_font(_LATIN_FONT, font_size)
+    offset = int(font_size * 0.7)
 
     for idx, (dtype, cnts_draw, (fcx, fcy, fr)) in enumerate(drawn):
         num = str(idx + 1)
         if dtype == "contour" and cnts_draw:
             all_pts = np.vstack([c.reshape(-1, 2) for c in cnts_draw])
-            tx = max(5, int(np.min(all_pts[:, 0])) - 45)
-            ty = max(5, int(np.min(all_pts[:, 1])) - 45)
+            tx = max(5, int(np.min(all_pts[:, 0])) - offset)
+            ty = max(5, int(np.min(all_pts[:, 1])) - offset)
         else:
-            tx = max(5, fcx - fr - 30)
-            ty = max(5, fcy - fr - 30)
+            tx = max(5, fcx - fr - offset)
+            ty = max(5, fcy - fr - offset)
         draw.text((tx, ty), num, font=font, fill=(255, 255, 255),
-                  stroke_width=4, stroke_fill=(0, 0, 0))
+                  stroke_width=max(2, int(font_size * 0.08)), stroke_fill=(0, 0, 0))
 
     return pil_b
 
