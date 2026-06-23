@@ -515,6 +515,8 @@ def _mask_ocr_text(img_a: np.ndarray, img_b: np.ndarray,
                 y1 = max(0, data["top"][i]  - pad)
                 x2 = min(bmask.shape[1], data["left"][i] + bw + pad)
                 y2 = min(bmask.shape[0], data["top"][i]  + bh + pad)
+                if line_mode and _is_watermark(text):
+                    x2 = min(bmask.shape[1], x2 + int(bw * 0.4))
                 bmask[y1:y2, x1:x2] = 0
                 print(f"[V3-OCR] Masked '{text}' → ({x1},{y1})–({x2},{y2})")
 
@@ -893,7 +895,7 @@ def detect_line(img_a, img_b, valid_mask=None, H=None, mask_rois=None):
 
     # ── Dynamic parameters ───────────────────────────────────────────────────
     min_area   = _min_area(w, h)
-    merge_r    = max(20, int(min(h, w) * 0.11))   # NMS radius for line mode
+    merge_r    = max(20, int(min(h, w) * 0.10))   # NMS radius for line mode
     nms_r      = merge_r
     max_r      = int(min(h, w) * 0.15)
     c_pad      = _circle_pad(w)
