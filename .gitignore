@@ -13,3 +13,5 @@ spot_the_difference/*_fixed.jpg
 social_tools/tiktok_session/
 social_tools/state.json
 *bifrost_cache.json
+service_account.json
+ocr_tools/service_account.json
