@@ -6,8 +6,8 @@ import cv2
 import numpy as np
 
 # Load extra 5 and 6
-img_a = std.load_bgr("spot_the_difference/puzzles/puzzle_extra_05.jpg")
-img_b = std.load_bgr("spot_the_difference/puzzles/puzzle_extra_06.jpg")
+img_a = std.load_bgr("puzzles/puzzle_extra_05.jpg")
+img_b = std.load_bgr("puzzles/puzzle_extra_06.jpg")
 
 img_b_aligned, valid_y_range, H_align, valid_mask = std.align(img_a, img_b, skip_ecc=False)
 
@@ -25,7 +25,7 @@ for i, (cx, cy, r) in enumerate(circles):
     print(f"  Circle {i+1}: center=({cx}, {cy}), r={r}")
 
 # Load answer_01.jpg
-gt_img = cv2.imread("spot_the_difference/correct_answers/answer_01.jpg")
+gt_img = cv2.imread("correct_answers/answer_01.jpg")
 hsv = cv2.cvtColor(gt_img, cv2.COLOR_BGR2HSV)
 lower_red1 = np.array([0, 50, 50])
 upper_red1 = np.array([10, 255, 255])

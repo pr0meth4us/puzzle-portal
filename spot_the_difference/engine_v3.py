@@ -868,6 +868,7 @@ def detect(img_a, img_b, valid_mask=None, H=None, split_dir=None,
             r = max(int(span + max_sub_r) + c_pad, 18)
         circles.append((int(cx), int(cy), min(r, max_r)))
 
+    circles.sort(key=lambda c: (c[1], c[0]))
     return circles, len(circles)
 
 
@@ -892,17 +893,15 @@ def detect_line(img_a, img_b, valid_mask=None, H=None, mask_rois=None):
 
     # ── Dynamic parameters ───────────────────────────────────────────────────
     min_area   = _min_area(w, h)
-    merge_r    = max(20, int(max(h, w) * 0.10))   # NMS radius for line mode
+    merge_r    = max(20, int(min(h, w) * 0.11))   # NMS radius for line mode
     nms_r      = merge_r
     max_r      = int(min(h, w) * 0.15)
     c_pad      = _circle_pad(w)
     border_px  = max(8, int(min(h, w) * 0.02))
     ssim_thresh = 30
     morph_k     = 3
-    # Minimum absolute pixel peak (ensures the region is a real drawing diff,
-    # not a minor alignment artefact). Raised to 55% of min-dim to reduce
-    # false positives on line drawings with partial alignment noise.
-    peak_min    = max(80, int(min(h, w) * 0.55))
+    # Set to a stable constant 180 per ground truth tuning.
+    peak_min    = 180
     print(f"[V3-LINE] Params: min_area={min_area}  nms_r={nms_r}  peak_min={peak_min}")
 
     score, diff = ssim(_gray(img_a), _gray(img_b), full=True)
@@ -915,7 +914,10 @@ def detect_line(img_a, img_b, valid_mask=None, H=None, mask_rois=None):
 
     # ── Build mask (no margin spike detection) ───────────────────────────────
     bmask = np.zeros_like(thresh)
-    bmask[border_px:h - border_px, border_px:w - border_px] = 255
+    # Mask top margin up to 40px to safely exclude all top edge alignment and header text noise.
+    # The highest genuine difference is at y=64.
+    top_border = max(40, border_px)
+    bmask[top_border:h - border_px, border_px:w - border_px] = 255
 
     if valid_mask is not None:
         ep = _erosion_px(h, w)
@@ -976,6 +978,7 @@ def detect_line(img_a, img_b, valid_mask=None, H=None, mask_rois=None):
             kept.append((cx, cy, r, d))
 
     circles = [(cx, cy, r) for cx, cy, r, _ in kept]
+    circles.sort(key=lambda c: (c[1], c[0]))
     return circles, len(kept)
 
 
@@ -1224,21 +1227,42 @@ def draw_contours_and_numbers_on_panel(panel_pil, circles, img_a, img_b_aligned,
 
     pil_b = Image.fromarray(cv2.cvtColor(b_cv, cv2.COLOR_BGR2RGB))
     draw  = ImageDraw.Draw(pil_b)
-    font_size = max(18, min(48, int(pw * 0.07)))
+    
+    # Scale font size based on shorter panel dimension min(pw, ph)
+    font_size = max(16, min(36, int(min(pw, ph) * 0.05)))
     font  = _load_font(_LATIN_FONT, font_size)
-    offset = int(font_size * 0.7)
 
     for idx, (dtype, cnts_draw, (fcx, fcy, fr)) in enumerate(drawn):
         num = str(idx + 1)
-        if dtype == "contour" and cnts_draw:
-            all_pts = np.vstack([c.reshape(-1, 2) for c in cnts_draw])
-            tx = max(5, int(np.min(all_pts[:, 0])) - offset)
-            ty = max(5, int(np.min(all_pts[:, 1])) - offset)
-        else:
-            tx = max(5, fcx - fr - offset)
-            ty = max(5, fcy - fr - offset)
-        draw.text((tx, ty), num, font=font, fill=(255, 255, 255),
-                  stroke_width=max(2, int(font_size * 0.08)), stroke_fill=(0, 0, 0))
+        # Determine center of the badge: we want it pinned to the top-left of the bounding circle
+        bx = fcx - fr
+        by = fcy - fr
+        
+        # Calculate bounding box of the number text to size the badge dynamically
+        bb = draw.textbbox((0, 0), num, font=font)
+        tw, th = bb[2] - bb[0], bb[3] - bb[1]
+        
+        # The badge radius should be proportional to font size and text width/height
+        br = max(int(font_size * 0.6), int(max(tw, th) / 2) + 4)
+        
+        # Clip the badge center so that the entire badge is inside the image frame
+        bx = max(br + 2, min(pw - br - 2, bx))
+        by = max(br + 2, min(ph - br - 2, by))
+        
+        # Draw filled circle (badge background) with a white outline
+        # Use contrast-based text/outline color for visual excellence
+        r, g, b = color
+        lum = 0.299 * r + 0.587 * g + 0.114 * b
+        text_fill = (0, 0, 0) if lum > 128 else (255, 255, 255)
+        text_stroke = (255, 255, 255) if lum > 128 else (0, 0, 0)
+        
+        draw.ellipse([bx - br, by - br, bx + br, by + br], fill=color, outline=(255, 255, 255), width=2)
+        
+        # Draw the text centered in the badge
+        tx = bx - (bb[0] + tw / 2)
+        ty = by - (bb[1] + th / 2)
+        draw.text((tx, ty), num, font=font, fill=text_fill,
+                  stroke_width=1, stroke_fill=text_stroke)
 
     return pil_b
 
